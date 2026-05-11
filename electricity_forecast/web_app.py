@@ -29,7 +29,9 @@ class WebState:
     feature_summary: dict[str, object] = field(default_factory=dict)
 
 
-def run_app(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> int:
+def run_app(
+    host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True
+) -> int:
     state = WebState(paths=_default_paths())
     server = ThreadingHTTPServer((host, _available_port(host, port)), _handler(state))
     url = f"http://{host}:{server.server_port}"
@@ -96,7 +98,9 @@ def _handler(state: WebState):
             body = df.to_csv(index=False).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/csv; charset=utf-8")
-            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header(
+                "Content-Disposition", f'attachment; filename="{filename}"'
+            )
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -123,7 +127,9 @@ def _train_action(state: WebState, form: dict[str, list[str]]) -> None:
         raise ValueError("Import data before training.")
     meter = _first(form, "train_meter")
     meters = None if not meter or meter == "All meters" else [meter]
-    state.trained_models, state.metrics_df = train_models(state.feature_table, meters=meters)
+    state.trained_models, state.metrics_df = train_models(
+        state.feature_table, meters=meters
+    )
     state.message = "Training and backtest completed."
 
 
@@ -132,15 +138,17 @@ def _forecast_action(state: WebState, form: dict[str, list[str]]) -> None:
     if state.feature_table is None or not state.trained_models:
         raise ValueError("Import data and train models before forecasting.")
     meter = _first(form, "forecast_meter")
-    meters = list(state.trained_models) if not meter or meter == "All meters" else [meter]
-    guests = float(_first(form, "guest_count") or 0)
+    meters = (
+        list(state.trained_models) if not meter or meter == "All meters" else [meter]
+    )
     request = ForecastRequest(
         meters=meters,
         horizon_hours=int(_first(form, "horizon_hours") or 168),
         temperature_c=float(_first(form, "temperature_c") or 28),
-        guest_count=guests if guests > 0 else None,
     )
-    state.forecast_df = forecast_dataframe(state.trained_models, state.feature_table, request)
+    state.forecast_df = forecast_dataframe(
+        state.trained_models, state.feature_table, request
+    )
     state.message = "Forecast completed."
 
 
@@ -201,7 +209,6 @@ def _render(state: WebState) -> str:
       <div><label>Meter</label>{_meter_select("forecast_meter", list(state.trained_models) if state.trained_models else meters)}</div>
       <div><label>Horizon</label><select name="horizon_hours"><option value="24">24 hours</option><option value="48">48 hours</option><option value="168" selected>168 hours</option><option value="720">30 days</option></select></div>
       <div><label>Temp C</label><input name="temperature_c" value="28"></div>
-      <div><label>Guests (0=auto)</label><input name="guest_count" value="0"></div>
       <button type="submit">Forecast</button>
     </form>
     {_forecast_svg(state.forecast_df)}
@@ -243,7 +250,9 @@ def _message(state: WebState) -> str:
 def _summaries(state: WebState) -> str:
     if not state.feature_summary:
         return ""
-    lines = ["<div class='table-wrap'><table><tr><th>File</th><th>Rows</th><th>Meters</th><th>Size MB</th><th>Range</th></tr>"]
+    lines = [
+        "<div class='table-wrap'><table><tr><th>File</th><th>Rows</th><th>Meters</th><th>Size MB</th><th>Range</th></tr>"
+    ]
     for item in state.csv_summary:
         lines.append(
             "<tr>"
@@ -286,7 +295,16 @@ def _forecast_svg(df) -> str:
     min_y, max_y = float(values.min()), float(values.max())
     span = max(max_y - min_y, 1.0)
     width, height = 1000, 260
-    colors = ["#0969da", "#1a7f37", "#d1242f", "#8250df", "#9a6700", "#bf3989", "#0550ae", "#57606a"]
+    colors = [
+        "#0969da",
+        "#1a7f37",
+        "#d1242f",
+        "#8250df",
+        "#9a6700",
+        "#bf3989",
+        "#0550ae",
+        "#57606a",
+    ]
     lines = [f'<svg viewBox="0 0 {width} {height}" role="img">']
     lines.append('<line x1="40" y1="220" x2="980" y2="220" stroke="#d8dee4"/>')
     lines.append('<line x1="40" y1="20" x2="40" y2="220" stroke="#d8dee4"/>')
@@ -300,15 +318,22 @@ def _forecast_svg(df) -> str:
             y = 220 - ((float(row["predicted_kwh"]) - min_y) / span) * 190
             points.append(f"{x:.1f},{y:.1f}")
         color = colors[idx % len(colors)]
-        lines.append(f'<polyline points="{" ".join(points)}" fill="none" stroke="{color}" stroke-width="2"/>')
-        lines.append(f'<text x="{50 + idx * 115}" y="16" fill="{color}" font-size="12">{html.escape(meter)}</text>')
+        lines.append(
+            f'<polyline points="{" ".join(points)}" fill="none" stroke="{color}" stroke-width="2"/>'
+        )
+        lines.append(
+            f'<text x="{50 + idx * 115}" y="16" fill="{color}" font-size="12">{html.escape(meter)}</text>'
+        )
     lines.append("</svg>")
     return "".join(lines)
 
 
 def _meter_select(name: str, meters: list[str]) -> str:
     options = ['<option value="All meters">All meters</option>']
-    options.extend(f'<option value="{html.escape(meter)}">{html.escape(meter)}</option>' for meter in meters)
+    options.extend(
+        f'<option value="{html.escape(meter)}">{html.escape(meter)}</option>'
+        for meter in meters
+    )
     return f'<select name="{name}">{"".join(options)}</select>'
 
 
@@ -323,7 +348,14 @@ def _first(form: dict[str, list[str]], key: str) -> str:
 
 
 def _path_keys() -> list[str]:
-    return ["kwh_csv", "guests_csv", "energy_log_csv", "pf_csv", "current_csv", "telemetry_csv"]
+    return [
+        "kwh_csv",
+        "guests_csv",
+        "energy_log_csv",
+        "pf_csv",
+        "current_csv",
+        "telemetry_csv",
+    ]
 
 
 def _data_paths(paths: dict[str, str]) -> DataPaths:

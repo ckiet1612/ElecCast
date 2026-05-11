@@ -9,19 +9,37 @@ from .types import ForecastRequest
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Train and forecast hourly electricity consumption.")
+    parser = argparse.ArgumentParser(
+        description="Train and forecast hourly electricity consumption."
+    )
     parser.add_argument("--kwh", required=True, help="Path to data_kwh.csv")
     parser.add_argument("--guests", help="Path to hourly visitors CSV")
     parser.add_argument("--energy-log", help="Path to energy_log.csv")
     parser.add_argument("--pf", help="Path to data_pf.csv")
     parser.add_argument("--current", help="Path to data_current.csv")
     parser.add_argument("--telemetry", help="Path to data_2026.csv")
-    parser.add_argument("--meter", action="append", help="Meter to train/forecast. Repeat for multiple meters.")
-    parser.add_argument("--horizon", type=int, default=168, help="Forecast horizon in hours.")
-    parser.add_argument("--temperature-c", type=float, help="Override simulated temperature.")
-    parser.add_argument("--guest-count", type=float, help="Override simulated guest count.")
-    parser.add_argument("--output", default="exports/forecast.csv", help="Forecast CSV output path.")
-    parser.add_argument("--metrics-output", default="exports/metrics.csv", help="Metrics CSV output path.")
+    parser.add_argument(
+        "--meter",
+        action="append",
+        help="Meter to train/forecast. Repeat for multiple meters.",
+    )
+    parser.add_argument(
+        "--horizon", type=int, default=168, help="Forecast horizon in hours."
+    )
+    parser.add_argument(
+        "--temperature-c", type=float, help="Override simulated temperature."
+    )
+    parser.add_argument(
+        "--guest-count", type=float, help="Override simulated guest count."
+    )
+    parser.add_argument(
+        "--output", default="exports/forecast.csv", help="Forecast CSV output path."
+    )
+    parser.add_argument(
+        "--metrics-output",
+        default="exports/metrics.csv",
+        help="Metrics CSV output path.",
+    )
     return parser
 
 

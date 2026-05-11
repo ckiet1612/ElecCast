@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from electricity_forecast.data import parse_meter_name, read_guest_counts, read_kwh_target
+from electricity_forecast.data import (
+    parse_meter_name,
+    read_guest_counts,
+    read_kwh_target,
+)
 
 
 def test_parse_meter_name_extracts_meter_area_metric():
@@ -35,8 +39,7 @@ def test_read_kwh_target_treats_time_hour_as_local(tmp_path):
 def test_read_guest_counts_treats_datetime_as_local(tmp_path):
     csv_path = tmp_path / "guests.csv"
     csv_path.write_text(
-        "datetime,day,hour,visitors\n"
-        "2026-01-01 07:00,Thu,7,331\n",
+        "datetime,day,hour,visitors\n2026-01-01 07:00,Thu,7,331\n",
         encoding="utf-8",
     )
     df = read_guest_counts(csv_path)

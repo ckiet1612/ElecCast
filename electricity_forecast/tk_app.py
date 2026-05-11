@@ -15,7 +15,9 @@ from .types import DataPaths, ForecastRequest
 
 
 def run_app() -> int:
-    os.environ.setdefault("MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "electricity_forecast_mpl"))
+    os.environ.setdefault(
+        "MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "electricity_forecast_mpl")
+    )
     root = tk.Tk()
     ElectricityForecastTk(root)
     root.mainloop()
@@ -38,7 +40,6 @@ class ElectricityForecastTk:
         self.forecast_meter = tk.StringVar(value="All meters")
         self.horizon = tk.StringVar(value="168 hours")
         self.temperature = tk.DoubleVar(value=28.0)
-        self.guest_count = tk.DoubleVar(value=0.0)
 
         notebook = ttk.Notebook(root)
         notebook.pack(fill="both", expand=True)
@@ -61,17 +62,25 @@ class ElectricityForecastTk:
             ("telemetry_csv", "data_2026.csv (optional, very slow)"),
         ]
         for row, (key, label) in enumerate(rows):
-            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+            ttk.Label(frame, text=label).grid(
+                row=row, column=0, sticky="w", padx=(0, 8), pady=4
+            )
             value = tk.StringVar(value=defaults.get(key, ""))
             self.paths[key] = value
-            ttk.Entry(frame, textvariable=value).grid(row=row, column=1, sticky="ew", pady=4)
-            ttk.Button(frame, text="Browse", command=lambda target=value: self._pick_csv(target)).grid(
-                row=row, column=2, padx=(8, 0), pady=4
+            ttk.Entry(frame, textvariable=value).grid(
+                row=row, column=1, sticky="ew", pady=4
             )
+            ttk.Button(
+                frame,
+                text="Browse",
+                command=lambda target=value: self._pick_csv(target),
+            ).grid(row=row, column=2, padx=(8, 0), pady=4)
         frame.columnconfigure(1, weight=1)
         actions = ttk.Frame(frame)
         actions.grid(row=len(rows), column=0, columnspan=3, sticky="ew", pady=(10, 8))
-        self.import_button = ttk.Button(actions, text="Import / Build Features", command=self.import_data)
+        self.import_button = ttk.Button(
+            actions, text="Import / Build Features", command=self.import_data
+        )
         self.import_button.pack(side="left")
         self.data_status = ttk.Label(actions, text="No data loaded")
         self.data_status.pack(side="left", padx=12)
@@ -89,9 +98,13 @@ class ElectricityForecastTk:
         controls = ttk.Frame(frame)
         controls.pack(fill="x", pady=(0, 8))
         ttk.Label(controls, text="Meter").pack(side="left")
-        self.train_meter_combo = ttk.Combobox(controls, textvariable=self.train_meter, values=["All meters"], width=28)
+        self.train_meter_combo = ttk.Combobox(
+            controls, textvariable=self.train_meter, values=["All meters"], width=28
+        )
         self.train_meter_combo.pack(side="left", padx=8)
-        self.train_button = ttk.Button(controls, text="Train / Backtest", command=self.train)
+        self.train_button = ttk.Button(
+            controls, text="Train / Backtest", command=self.train
+        )
         self.train_button.pack(side="left")
         self.metrics_tree = _tree(frame)
         self.metrics_tree.pack(fill="both", expand=True)
@@ -115,10 +128,12 @@ class ElectricityForecastTk:
             state="readonly",
         ).pack(side="left", padx=8)
         ttk.Label(controls, text="Temp C").pack(side="left")
-        ttk.Spinbox(controls, from_=0, to=50, textvariable=self.temperature, width=6).pack(side="left", padx=8)
-        ttk.Label(controls, text="Guests (0=auto)").pack(side="left")
-        ttk.Spinbox(controls, from_=0, to=10000, textvariable=self.guest_count, width=8).pack(side="left", padx=8)
-        self.forecast_button = ttk.Button(controls, text="Forecast", command=self.forecast)
+        ttk.Spinbox(
+            controls, from_=0, to=50, textvariable=self.temperature, width=6
+        ).pack(side="left", padx=8)
+        self.forecast_button = ttk.Button(
+            controls, text="Forecast", command=self.forecast
+        )
         self.forecast_button.pack(side="left")
 
         self.chart_frame = ttk.Frame(frame)
@@ -129,8 +144,12 @@ class ElectricityForecastTk:
     def _build_export_tab(self, notebook: ttk.Notebook) -> None:
         frame = ttk.Frame(notebook, padding=12)
         notebook.add(frame, text="Export")
-        ttk.Button(frame, text="Save Forecast CSV", command=self.save_forecast).pack(anchor="w", pady=4)
-        ttk.Button(frame, text="Save Metrics CSV", command=self.save_metrics).pack(anchor="w", pady=4)
+        ttk.Button(frame, text="Save Forecast CSV", command=self.save_forecast).pack(
+            anchor="w", pady=4
+        )
+        ttk.Button(frame, text="Save Metrics CSV", command=self.save_metrics).pack(
+            anchor="w", pady=4
+        )
         self.export_status = ttk.Label(frame, text="")
         self.export_status.pack(anchor="w", pady=12)
 
@@ -161,7 +180,9 @@ class ElectricityForecastTk:
 
     def forecast(self) -> None:
         if self.feature_table is None or not self.trained_models:
-            messagebox.showerror("Error", "Import data and train models before forecasting.")
+            messagebox.showerror(
+                "Error", "Import data and train models before forecasting."
+            )
             return
         self.forecast_button.configure(state="disabled")
 
@@ -172,7 +193,6 @@ class ElectricityForecastTk:
                 meters=meters,
                 horizon_hours=_horizon_hours(self.horizon.get()),
                 temperature_c=float(self.temperature.get()),
-                guest_count=float(self.guest_count.get()) if self.guest_count.get() > 0 else None,
             )
             return forecast_dataframe(self.trained_models, self.feature_table, request)
 
@@ -256,7 +276,9 @@ class ElectricityForecastTk:
         )
 
     def _pick_csv(self, target: tk.StringVar) -> None:
-        path = filedialog.askopenfilename(filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")])
+        path = filedialog.askopenfilename(
+            filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")]
+        )
         if path:
             target.set(path)
 
@@ -264,7 +286,9 @@ class ElectricityForecastTk:
         if df is None or df.empty:
             messagebox.showerror("Error", "Nothing to save.")
             return
-        path = filedialog.asksaveasfilename(defaultextension=".csv", initialfile=default_name)
+        path = filedialog.asksaveasfilename(
+            defaultextension=".csv", initialfile=default_name
+        )
         if path:
             df.to_csv(path, index=False)
             self.export_status.configure(text=f"Saved {path}")

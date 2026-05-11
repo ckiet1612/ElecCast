@@ -50,7 +50,9 @@ def build_feature_table(paths: DataPaths):
         if frame.empty:
             continue
         merge_cols = ["timestamp_local", "meter", "area"]
-        features = features.merge(frame, on=merge_cols, how="left", suffixes=("", "_new"))
+        features = features.merge(
+            frame, on=merge_cols, how="left", suffixes=("", "_new")
+        )
         for col in ["p", "pf", "iavg"]:
             new_col = f"{col}_new"
             if new_col in features:
@@ -63,7 +65,9 @@ def build_feature_table(paths: DataPaths):
     for col, default in [("p", 0.0), ("pf", 0.95), ("iavg", 0.0)]:
         if col not in features:
             features[col] = default
-        features[col] = features.groupby("meter")[col].transform(lambda s: s.ffill().bfill())
+        features[col] = features.groupby("meter")[col].transform(
+            lambda s: s.ffill().bfill()
+        )
         features[col] = features[col].fillna(default)
 
     if paths.guests_csv:
@@ -72,7 +76,9 @@ def build_feature_table(paths: DataPaths):
 
     features = add_time_features(features)
     features["temperature_c"] = features["timestamp_local"].map(default_temperature)
-    simulated_guests = features.apply(lambda row: default_guest_count(row["timestamp_local"], row["area"]), axis=1)
+    simulated_guests = features.apply(
+        lambda row: default_guest_count(row["timestamp_local"], row["area"]), axis=1
+    )
     if "guest_count" in features:
         features["guest_count"] = features["guest_count"].fillna(simulated_guests)
     else:
@@ -117,8 +123,12 @@ def add_lag_features(df):
     data["lag_1h"] = grouped["kwh"].shift(1)
     data["lag_24h"] = grouped["kwh"].shift(24)
     data["lag_168h"] = grouped["kwh"].shift(168)
-    data["rolling_24h"] = grouped["kwh"].transform(lambda s: s.shift(1).rolling(24, min_periods=1).mean())
-    data["rolling_168h"] = grouped["kwh"].transform(lambda s: s.shift(1).rolling(168, min_periods=1).mean())
+    data["rolling_24h"] = grouped["kwh"].transform(
+        lambda s: s.shift(1).rolling(24, min_periods=1).mean()
+    )
+    data["rolling_168h"] = grouped["kwh"].transform(
+        lambda s: s.shift(1).rolling(168, min_periods=1).mean()
+    )
 
     meter_median = grouped["kwh"].transform("median")
     global_median = data["kwh"].median()
@@ -145,7 +155,13 @@ def clean_training_frame(df):
 
 def feature_summary(df) -> dict[str, object]:
     if df.empty:
-        return {"rows": 0, "meters": 0, "min_time": None, "max_time": None, "missing_kwh": 0}
+        return {
+            "rows": 0,
+            "meters": 0,
+            "min_time": None,
+            "max_time": None,
+            "missing_kwh": 0,
+        }
     return {
         "rows": int(len(df)),
         "meters": int(df["meter"].nunique()),

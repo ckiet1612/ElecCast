@@ -24,13 +24,19 @@ def parse_meter_name(raw_name: str) -> ParsedName:
         area = meter.split("_MSB", 1)[0]
     else:
         area = meter.split("_", 1)[0]
-    return ParsedName(raw_name=str(raw_name), meter=meter, area=area, metric=metric.upper())
+    return ParsedName(
+        raw_name=str(raw_name), meter=meter, area=area, metric=metric.upper()
+    )
 
 
 def parse_names_series(series):
     """Vectorized-ish helper returning meter/area/metric columns for a pandas Series."""
     parsed = series.map(parse_meter_name)
-    return parsed.map(lambda item: item.meter), parsed.map(lambda item: item.area), parsed.map(lambda item: item.metric)
+    return (
+        parsed.map(lambda item: item.meter),
+        parsed.map(lambda item: item.area),
+        parsed.map(lambda item: item.metric),
+    )
 
 
 def read_kwh_target(kwh_csv: str | Path):
@@ -46,7 +52,9 @@ def read_kwh_target(kwh_csv: str | Path):
     df = df[["name", "time", "hour", "value"]].copy()
     df["meter"], df["area"], df["metric"] = parse_names_series(df["name"])
     df = df[df["metric"].eq("KWH")].copy()
-    df["timestamp_local"] = pd.to_datetime(df["time"], errors="coerce") + pd.to_timedelta(
+    df["timestamp_local"] = pd.to_datetime(
+        df["time"], errors="coerce"
+    ) + pd.to_timedelta(
         pd.to_numeric(df["hour"], errors="coerce").fillna(0).astype(int), unit="h"
     )
     df["timestamp_local"] = df["timestamp_local"].dt.tz_localize(
@@ -96,7 +104,9 @@ def read_raw_metric_hourly(
     chunks = []
     usecols = ["time", "name", RAW_VALUE_COLUMN]
     for chunk in pd.read_csv(path, usecols=usecols, chunksize=chunksize):
-        chunk["meter"], chunk["area"], chunk["metric"] = parse_names_series(chunk["name"])
+        chunk["meter"], chunk["area"], chunk["metric"] = parse_names_series(
+            chunk["name"]
+        )
         chunk = chunk[chunk["metric"].isin(wanted)].copy()
         if chunk.empty:
             continue
@@ -107,14 +117,20 @@ def read_raw_metric_hourly(
         )
         chunk["value"] = pd.to_numeric(chunk[RAW_VALUE_COLUMN], errors="coerce")
         chunk = chunk.dropna(subset=["timestamp_local", "meter", "value"])
-        grouped = chunk.groupby(["timestamp_local", "meter", "area", "metric"], as_index=False)["value"].mean()
+        grouped = chunk.groupby(
+            ["timestamp_local", "meter", "area", "metric"], as_index=False
+        )["value"].mean()
         chunks.append(grouped)
 
     if not chunks:
-        return pd.DataFrame(columns=["timestamp_local", "meter", "area", "metric", "value"])
+        return pd.DataFrame(
+            columns=["timestamp_local", "meter", "area", "metric", "value"]
+        )
 
     data = pd.concat(chunks, ignore_index=True)
-    return data.groupby(["timestamp_local", "meter", "area", "metric"], as_index=False)["value"].mean()
+    return data.groupby(["timestamp_local", "meter", "area", "metric"], as_index=False)[
+        "value"
+    ].mean()
 
 
 def pivot_metric_features(raw_hourly):
@@ -129,11 +145,16 @@ def pivot_metric_features(raw_hourly):
         aggfunc="mean",
     ).reset_index()
     pivot.columns.name = None
-    rename = {column: column.lower().replace("%", "pct_").replace("-", "_") for column in pivot.columns}
+    rename = {
+        column: column.lower().replace("%", "pct_").replace("-", "_")
+        for column in pivot.columns
+    }
     return pivot.rename(columns=rename)
 
 
-def summarize_csv(path: str | Path, sample_rows: int = 50_000, full_threshold_mb: float = 25.0) -> dict[str, object]:
+def summarize_csv(
+    path: str | Path, sample_rows: int = 50_000, full_threshold_mb: float = 25.0
+) -> dict[str, object]:
     import pandas as pd
 
     csv_path = Path(path)

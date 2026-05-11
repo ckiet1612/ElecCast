@@ -11,7 +11,9 @@ from .types import DataPaths, ForecastRequest
 
 
 class WorkerMixin:
-    def run_task(self, task: Callable, on_success: Callable, on_error: Callable | None = None):
+    def run_task(
+        self, task: Callable, on_success: Callable, on_error: Callable | None = None
+    ):
         from .qt_compat import QObject, QThread, Signal
 
         class Worker(QObject):
@@ -90,7 +92,9 @@ class MainWindow(WorkerMixin):
         for row, (key, label) in enumerate(labels):
             edit = QLineEdit(defaults.get(key, ""))
             browse = QPushButton("Browse")
-            browse.clicked.connect(lambda _checked=False, target=edit: self.pick_file(target))
+            browse.clicked.connect(
+                lambda _checked=False, target=edit: self.pick_file(target)
+            )
             path_grid.addWidget(QLabel(label), row, 0)
             path_grid.addWidget(edit, row, 1)
             path_grid.addWidget(browse, row, 2)
@@ -131,16 +135,17 @@ class MainWindow(WorkerMixin):
         self.forecast_meter_combo = QComboBox()
         self.forecast_meter_combo.addItem("All meters", "")
         self.horizon_combo = QComboBox()
-        for label, hours in [("24 hours", 24), ("48 hours", 48), ("168 hours", 168), ("30 days", 720)]:
+        for label, hours in [
+            ("24 hours", 24),
+            ("48 hours", 48),
+            ("168 hours", 168),
+            ("30 days", 720),
+        ]:
             self.horizon_combo.addItem(label, hours)
         self.temperature_spin = QDoubleSpinBox()
         self.temperature_spin.setRange(0, 50)
         self.temperature_spin.setDecimals(1)
         self.temperature_spin.setValue(28.0)
-        self.guest_spin = QDoubleSpinBox()
-        self.guest_spin.setRange(0, 10000)
-        self.guest_spin.setDecimals(0)
-        self.guest_spin.setSpecialValueText("Auto")
         self.forecast_button = QPushButton("Forecast")
         self.forecast_button.clicked.connect(self.forecast)
         for widget in [
@@ -150,8 +155,6 @@ class MainWindow(WorkerMixin):
             self.horizon_combo,
             QLabel("Temp C"),
             self.temperature_spin,
-            QLabel("Guests"),
-            self.guest_spin,
             self.forecast_button,
         ]:
             forecast_controls.addWidget(widget)
@@ -188,7 +191,9 @@ class MainWindow(WorkerMixin):
     def pick_file(self, target):
         from .qt_compat import QFileDialog
 
-        path, _ = QFileDialog.getOpenFileName(self.qt_window, "Select CSV", str(Path.home()), "CSV Files (*.csv)")
+        path, _ = QFileDialog.getOpenFileName(
+            self.qt_window, "Select CSV", str(Path.home()), "CSV Files (*.csv)"
+        )
         if path:
             target.setText(path)
 
@@ -274,12 +279,10 @@ class MainWindow(WorkerMixin):
         def task():
             meter = self.forecast_meter_combo.currentData()
             meters = [meter] if meter else list(self.trained_models.keys())
-            guest_value = self.guest_spin.value() if self.guest_spin.value() > 0 else None
             request = ForecastRequest(
                 meters=meters,
                 horizon_hours=int(self.horizon_combo.currentData()),
                 temperature_c=float(self.temperature_spin.value()),
-                guest_count=guest_value,
             )
             return forecast_dataframe(self.trained_models, self.feature_table, request)
 
@@ -319,7 +322,9 @@ class MainWindow(WorkerMixin):
         if df is None or df.empty:
             self.show_error("Nothing to save.")
             return
-        path, _ = QFileDialog.getSaveFileName(self.qt_window, "Save CSV", default_name, "CSV Files (*.csv)")
+        path, _ = QFileDialog.getSaveFileName(
+            self.qt_window, "Save CSV", default_name, "CSV Files (*.csv)"
+        )
         if path:
             df.to_csv(path, index=False)
             self.export_status.setText(f"Saved {path}")

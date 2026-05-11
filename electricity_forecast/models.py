@@ -8,7 +8,9 @@ from .features import NUMERIC_FEATURE_COLUMNS, clean_training_frame
 from .types import ForecastRequest, LOCAL_TIMEZONE, MeterModelMetrics, TrainedMeterModel
 
 
-def train_models(feature_table, meters: list[str] | None = None, include_arima: bool = True):
+def train_models(
+    feature_table, meters: list[str] | None = None, include_arima: bool = True
+):
     import numpy as np
     import pandas as pd
     from sklearn.impute import SimpleImputer
@@ -31,7 +33,10 @@ def train_models(feature_table, meters: list[str] | None = None, include_arima: 
         meter_df = meter_df.sort_values("timestamp_local").reset_index(drop=True)
         if len(meter_df) < 30:
             continue
-        split_idx = max(int(len(meter_df) * 0.8), len(meter_df) - min(168, max(8, len(meter_df) // 5)))
+        split_idx = max(
+            int(len(meter_df) * 0.8),
+            len(meter_df) - min(168, max(8, len(meter_df) // 5)),
+        )
         split_idx = min(max(split_idx, 8), len(meter_df) - 4)
         train_df = meter_df.iloc[:split_idx]
         test_df = meter_df.iloc[split_idx:]
@@ -46,8 +51,14 @@ def train_models(feature_table, meters: list[str] | None = None, include_arima: 
         candidates.append(("SeasonalNaive", "baseline", None, baseline_pred))
 
         for name, estimator in [
-            ("LinearRegression", make_pipeline(SimpleImputer(), StandardScaler(), LinearRegression())),
-            ("RidgeRegression", make_pipeline(SimpleImputer(), StandardScaler(), Ridge(alpha=1.0))),
+            (
+                "LinearRegression",
+                make_pipeline(SimpleImputer(), StandardScaler(), LinearRegression()),
+            ),
+            (
+                "RidgeRegression",
+                make_pipeline(SimpleImputer(), StandardScaler(), Ridge(alpha=1.0)),
+            ),
         ]:
             model = estimator.fit(X_train, y_train)
             candidates.append((name, "sklearn", model, model.predict(X_test)))
@@ -77,23 +88,33 @@ def train_models(feature_table, meters: list[str] | None = None, include_arima: 
             scored.append((rmse, metrics, name, kind, estimator))
 
         scored.sort(key=lambda item: item[0])
-        _, selected_metrics, selected_name, selected_kind, selected_estimator = scored[0]
+        _, selected_metrics, selected_name, selected_kind, selected_estimator = scored[
+            0
+        ]
 
         if selected_kind == "baseline":
             final_estimator = None
             residual_pred = _baseline_predict(X_test, y_train.median())
         elif selected_kind == "arima":
-            final_estimator, residual_pred = _fit_arima(meter_df["kwh"].astype(float), len(test_df))
+            final_estimator, residual_pred = _fit_arima(
+                meter_df["kwh"].astype(float), len(test_df)
+            )
             if final_estimator is None:
                 final_estimator = None
                 selected_name = "SeasonalNaive"
                 selected_kind = "baseline"
                 residual_pred = _baseline_predict(X_test, y_train.median())
         else:
-            final_estimator = selected_estimator.fit(meter_df[feature_columns], meter_df["kwh"].astype(float))
+            final_estimator = selected_estimator.fit(
+                meter_df[feature_columns], meter_df["kwh"].astype(float)
+            )
             residual_pred = final_estimator.predict(X_test)
 
-        residual_std = float(np.std(np.asarray(y_test) - np.asarray(residual_pred))) if len(test_df) else 0.0
+        residual_std = (
+            float(np.std(np.asarray(y_test) - np.asarray(residual_pred)))
+            if len(test_df)
+            else 0.0
+        )
         area = str(meter_df["area"].iloc[0])
         history_cols = ["timestamp_local", "meter", "area", "kwh", "p", "pf", "iavg"]
         history_cols = [col for col in history_cols if col in meter_df.columns]
@@ -115,7 +136,9 @@ def train_models(feature_table, meters: list[str] | None = None, include_arima: 
     return trained, metrics_df
 
 
-def forecast_dataframe(models: dict[str, TrainedMeterModel], feature_table, request: ForecastRequest):
+def forecast_dataframe(
+    models: dict[str, TrainedMeterModel], feature_table, request: ForecastRequest
+):
     import pandas as pd
 
     if not models:
@@ -163,10 +186,16 @@ def _baseline_predict(X, fallback: float):
         if column not in X:
             continue
         candidate = X[column].astype(float).to_numpy()
-        values = candidate if values is None else np.where(np.isnan(values), candidate, values)
+        values = (
+            candidate
+            if values is None
+            else np.where(np.isnan(values), candidate, values)
+        )
     if values is None:
         values = np.full(len(X), float(fallback if fallback == fallback else 0.0))
-    values = np.where(np.isnan(values), float(fallback if fallback == fallback else 0.0), values)
+    values = np.where(
+        np.isnan(values), float(fallback if fallback == fallback else 0.0), values
+    )
     return np.clip(values, 0.0, None)
 
 
@@ -210,7 +239,9 @@ def _forecast_meter(model: TrainedMeterModel, timestamps, request: ForecastReque
     rows = []
     if model.kind == "arima" and model.estimator is not None:
         try:
-            preds = np.asarray(model.estimator.forecast(steps=len(timestamps)), dtype=float)
+            preds = np.asarray(
+                model.estimator.forecast(steps=len(timestamps)), dtype=float
+            )
         except Exception:
             preds = None
         if preds is not None:
@@ -221,11 +252,15 @@ def _forecast_meter(model: TrainedMeterModel, timestamps, request: ForecastReque
 
     values = list(history["kwh"].astype(float))
     timestamps_seen = list(history["timestamp_local"])
-    value_by_ts = {pd.Timestamp(ts): float(value) for ts, value in zip(timestamps_seen, values)}
+    value_by_ts = {
+        pd.Timestamp(ts): float(value) for ts, value in zip(timestamps_seen, values)
+    }
     meter_median = float(pd.Series(values).median()) if values else 0.0
 
     for timestamp in timestamps:
-        row = _future_feature_row(model, history, value_by_ts, values, timestamp, request, meter_median)
+        row = _future_feature_row(
+            model, history, value_by_ts, values, timestamp, request, meter_median
+        )
         if model.kind == "baseline" or model.estimator is None:
             pred = _baseline_predict(pd.DataFrame([row]), meter_median)[0]
         else:
@@ -235,13 +270,24 @@ def _forecast_meter(model: TrainedMeterModel, timestamps, request: ForecastReque
                     X[col] = X[col].fillna(value)
             pred = model.estimator.predict(X)[0]
         pred = max(float(pred), 0.0)
-        rows.append(_forecast_row(model, timestamp, pred, request))
+        rows.append(
+            _forecast_row(
+                model,
+                timestamp,
+                pred,
+                request,
+                temperature_c=row["temperature_c"],
+                guest_count=row["guest_count"],
+            )
+        )
         values.append(pred)
         value_by_ts[pd.Timestamp(timestamp)] = pred
     return rows
 
 
-def _future_feature_row(model, history, value_by_ts, values, timestamp, request, fallback):
+def _future_feature_row(
+    model, history, value_by_ts, values, timestamp, request, fallback
+):
     import pandas as pd
 
     p = _recent_median(history, "p", 0.0)
@@ -249,7 +295,9 @@ def _future_feature_row(model, history, value_by_ts, values, timestamp, request,
     iavg = _recent_median(history, "iavg", 0.0)
     lag_1h = value_by_ts.get(pd.Timestamp(timestamp) - pd.Timedelta(hours=1), fallback)
     lag_24h = value_by_ts.get(pd.Timestamp(timestamp) - pd.Timedelta(hours=24), lag_1h)
-    lag_168h = value_by_ts.get(pd.Timestamp(timestamp) - pd.Timedelta(hours=168), lag_24h)
+    lag_168h = value_by_ts.get(
+        pd.Timestamp(timestamp) - pd.Timedelta(hours=168), lag_24h
+    )
     recent_24 = values[-24:] if values else [fallback]
     recent_168 = values[-168:] if values else [fallback]
     return {
@@ -261,12 +309,8 @@ def _future_feature_row(model, history, value_by_ts, values, timestamp, request,
         "p": p,
         "pf": pf,
         "iavg": iavg,
-        "temperature_c": float(request.temperature_c)
-        if request.temperature_c is not None
-        else default_temperature(timestamp),
-        "guest_count": float(request.guest_count)
-        if request.guest_count is not None
-        else default_guest_count(timestamp, model.area),
+        "temperature_c": _forecast_temperature(timestamp, request),
+        "guest_count": _forecast_guest_count(model, timestamp, request),
         "lag_1h": lag_1h,
         "lag_24h": lag_24h,
         "lag_168h": lag_168h,
@@ -281,7 +325,30 @@ def _recent_median(history, column: str, default: float) -> float:
     return float(history[column].tail(168).median())
 
 
-def _forecast_row(model: TrainedMeterModel, timestamp, pred: float, request: ForecastRequest):
+def _forecast_temperature(timestamp, request: ForecastRequest) -> float:
+    return (
+        float(request.temperature_c)
+        if request.temperature_c is not None
+        else default_temperature(timestamp)
+    )
+
+
+def _forecast_guest_count(
+    model: TrainedMeterModel, timestamp, request: ForecastRequest
+) -> float:
+    if request.guest_count is not None:
+        return float(request.guest_count)
+    return default_guest_count(timestamp, model.area)
+
+
+def _forecast_row(
+    model: TrainedMeterModel,
+    timestamp,
+    pred: float,
+    request: ForecastRequest,
+    temperature_c: float | None = None,
+    guest_count: float | None = None,
+):
     residual = max(model.residual_std, 0.0)
     lower = max(pred - 1.96 * residual, 0.0) if residual else None
     upper = pred + 1.96 * residual if residual else None
@@ -293,6 +360,12 @@ def _forecast_row(model: TrainedMeterModel, timestamp, pred: float, request: For
         "model_name": model.model_name,
         "lower_kwh": lower,
         "upper_kwh": upper,
-        "temperature_c": request.temperature_c,
-        "guest_count": request.guest_count,
+        "temperature_c": (
+            _forecast_temperature(timestamp, request)
+            if temperature_c is None
+            else float(temperature_c)
+        ),
+        "guest_count": _forecast_guest_count(model, timestamp, request)
+        if guest_count is None
+        else float(guest_count),
     }

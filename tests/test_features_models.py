@@ -12,12 +12,18 @@ from electricity_forecast.types import ForecastRequest, LOCAL_TIMEZONE
 
 def synthetic_features(meters=("FB2_MSB01", "SHOW_MSB01"), periods=240):
     rows = []
-    timestamps = pd.date_range("2026-01-01 00:00", periods=periods, freq="h", tz=LOCAL_TIMEZONE)
+    timestamps = pd.date_range(
+        "2026-01-01 00:00", periods=periods, freq="h", tz=LOCAL_TIMEZONE
+    )
     for meter in meters:
         area = meter.split("_MSB", 1)[0]
         base = 80 if meter.startswith("FB2") else 120
         for idx, timestamp in enumerate(timestamps):
-            value = base + 20 * math.sin(timestamp.hour / 24 * 2 * math.pi) + (idx % 7) * 1.5
+            value = (
+                base
+                + 20 * math.sin(timestamp.hour / 24 * 2 * math.pi)
+                + (idx % 7) * 1.5
+            )
             rows.append(
                 {
                     "timestamp_local": timestamp,
@@ -48,12 +54,15 @@ def test_train_and_forecast_generates_requested_rows():
     forecast = forecast_dataframe(
         models,
         features,
-        ForecastRequest(meters=list(models.keys()), horizon_hours=168, temperature_c=29.0),
+        ForecastRequest(
+            meters=list(models.keys()), horizon_hours=168, temperature_c=29.0
+        ),
     )
     assert not metrics.empty
     assert len(models) == 2
     assert len(forecast) == 2 * 168
     assert forecast["predicted_kwh"].ge(0).all()
+    assert forecast["guest_count"].notna().all()
 
 
 def test_build_feature_table_uses_guest_csv(tmp_path):
@@ -65,8 +74,7 @@ def test_build_feature_table_uses_guest_csv(tmp_path):
         encoding="utf-8",
     )
     guest_path.write_text(
-        "datetime,day,hour,visitors\n"
-        "2026-01-01 07:00,Thu,7,331\n",
+        "datetime,day,hour,visitors\n2026-01-01 07:00,Thu,7,331\n",
         encoding="utf-8",
     )
     df = build_feature_table_from_files(kwh_path, guests_csv=guest_path)
