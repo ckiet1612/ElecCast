@@ -14,6 +14,13 @@ from .features import build_feature_table, feature_summary
 from .models import forecast_dataframe, train_models
 from .paths import default_guests_csv
 from .types import DataPaths, ForecastRequest
+from .weather import (
+    default_weather_month,
+    default_weather_location_label,
+    month_bounds,
+    month_options,
+    monthly_average_temperature,
+)
 
 
 @dataclass
@@ -23,6 +30,7 @@ class WebState:
     trained_models: dict = field(default_factory=dict)
     metrics_df: object | None = None
     forecast_df: object | None = None
+    weather_result: object | None = None
     message: str = ""
     error: str = ""
     csv_summary: list[dict[str, object]] = field(default_factory=list)
@@ -118,6 +126,7 @@ def _import_action(state: WebState, form: dict[str, list[str]]) -> None:
     state.trained_models = {}
     state.metrics_df = None
     state.forecast_df = None
+    state.weather_result = None
     state.message = "Imported data and built feature table."
 
 
@@ -141,14 +150,21 @@ def _forecast_action(state: WebState, form: dict[str, list[str]]) -> None:
     meters = (
         list(state.trained_models) if not meter or meter == "All meters" else [meter]
     )
+    weather = monthly_average_temperature(
+        _first(form, "weather_location") or default_weather_location_label(),
+        _first(form, "weather_month") or default_weather_month(),
+    )
     request = ForecastRequest(
         meters=meters,
         horizon_hours=int(_first(form, "horizon_hours") or 168),
-        temperature_c=float(_first(form, "temperature_c") or 28),
+        temperature_c=weather.average_c,
+        weather_location=weather.location_label,
+        weather_month=weather.month,
     )
     state.forecast_df = forecast_dataframe(
         state.trained_models, state.feature_table, request
     )
+    state.weather_result = weather
     state.message = "Forecast completed."
 
 
@@ -208,7 +224,9 @@ def _render(state: WebState) -> str:
     <form method="post" action="/forecast" class="row">
       <div><label>Meter</label>{_meter_select("forecast_meter", list(state.trained_models) if state.trained_models else meters)}</div>
       <div><label>Horizon</label><select name="horizon_hours"><option value="24">24 hours</option><option value="48">48 hours</option><option value="168" selected>168 hours</option><option value="720">30 days</option></select></div>
-      <div><label>Temp C</label><input name="temperature_c" value="28"></div>
+      <div><label>Location</label><input name="weather_location" value="{html.escape(_weather_location_value(state))}"></div>
+      <div><label>Month</label>{_month_select(_weather_month_value(state))}</div>
+      <div><label>Avg Temp</label><input value="{html.escape(_weather_temperature_value(state))}" disabled></div>
       <button type="submit">Forecast</button>
     </form>
     {_forecast_svg(state.forecast_df)}
@@ -237,6 +255,45 @@ def _path_inputs(paths: dict[str, str]) -> str:
         f'<div><label>{label}</label><input name="{key}" value="{html.escape(paths.get(key, ""))}"></div>'
         for key, label in labels.items()
     )
+
+
+def _weather_location_value(state: WebState) -> str:
+    if state.weather_result is not None:
+        return state.weather_result.location_label
+    return default_weather_location_label()
+
+
+def _weather_month_value(state: WebState) -> str:
+    if state.weather_result is not None:
+        return state.weather_result.month
+    if state.feature_table is not None:
+        max_time = state.feature_table["timestamp_local"].max()
+        if hasattr(max_time, "strftime"):
+            return max_time.strftime("%Y-%m")
+    return default_weather_month()
+
+
+def _weather_temperature_value(state: WebState) -> str:
+    if state.weather_result is None:
+        return "API on forecast"
+    return f"{state.weather_result.average_c:.1f} C"
+
+
+def _month_select(selected: str) -> str:
+    try:
+        start_date, _ = month_bounds(selected)
+        options = month_options(start_date)
+    except Exception:
+        options = month_options()
+    if selected not in options:
+        options = [selected, *options]
+    html_options = []
+    for value in options:
+        selected_attr = " selected" if value == selected else ""
+        html_options.append(
+            f'<option value="{html.escape(value)}"{selected_attr}>{html.escape(value)}</option>'
+        )
+    return f'<select name="weather_month">{"".join(html_options)}</select>'
 
 
 def _message(state: WebState) -> str:

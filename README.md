@@ -42,6 +42,10 @@ source .venv/bin/activate
 ELECTRICITY_FORECAST_UI=web python -m electricity_forecast.app
 ```
 
+## Weather Temperature
+
+The Forecast tab uses Open-Meteo to fetch the average monthly temperature from a selected location and month. The default location is `Hòn Thơm, Phú Quốc`; you can choose another preset location or type a place name / `lat,long`. Internet access is required for this API lookup.
+
 ## CLI Smoke Workflow
 
 ```bash
@@ -50,6 +54,8 @@ python -m electricity_forecast.cli \
   --pf /Users/macbook/Downloads/data_pf.csv \
   --current /Users/macbook/Downloads/data_current.csv \
   --telemetry /Users/macbook/Downloads/data_2026.csv \
+  --weather-location "Hòn Thơm, Phú Quốc" \
+  --weather-month 2026-01 \
   --horizon 168 \
   --output exports/forecast_168h.csv
 ```

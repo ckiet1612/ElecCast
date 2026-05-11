@@ -8,6 +8,13 @@ from .features import build_feature_table, feature_summary
 from .models import forecast_dataframe, train_models
 from .paths import default_guests_csv
 from .types import DataPaths, ForecastRequest
+from .weather import (
+    default_weather_month,
+    default_weather_location_label,
+    month_options,
+    monthly_average_temperature,
+    weather_location_labels,
+)
 
 
 class WorkerMixin:
@@ -45,7 +52,6 @@ class MainWindow(WorkerMixin):
     def __init__(self):
         from .qt_compat import (
             QComboBox,
-            QDoubleSpinBox,
             QFormLayout,
             QGridLayout,
             QHBoxLayout,
@@ -142,10 +148,14 @@ class MainWindow(WorkerMixin):
             ("30 days", 720),
         ]:
             self.horizon_combo.addItem(label, hours)
-        self.temperature_spin = QDoubleSpinBox()
-        self.temperature_spin.setRange(0, 50)
-        self.temperature_spin.setDecimals(1)
-        self.temperature_spin.setValue(28.0)
+        self.weather_location_combo = QComboBox()
+        self.weather_location_combo.setEditable(True)
+        self.weather_location_combo.addItems(weather_location_labels())
+        self.weather_location_combo.setCurrentText(default_weather_location_label())
+        self.weather_month_combo = QComboBox()
+        self.weather_month_combo.addItems(month_options())
+        self.weather_month_combo.setCurrentText(default_weather_month())
+        self.temperature_label = QLabel("Avg Temp: 28.0 C")
         self.forecast_button = QPushButton("Forecast")
         self.forecast_button.clicked.connect(self.forecast)
         for widget in [
@@ -153,8 +163,11 @@ class MainWindow(WorkerMixin):
             self.forecast_meter_combo,
             QLabel("Horizon"),
             self.horizon_combo,
-            QLabel("Temp C"),
-            self.temperature_spin,
+            QLabel("Location"),
+            self.weather_location_combo,
+            QLabel("Month"),
+            self.weather_month_combo,
+            self.temperature_label,
             self.forecast_button,
         ]:
             forecast_controls.addWidget(widget)
@@ -247,6 +260,11 @@ class MainWindow(WorkerMixin):
             combo.addItem("All meters", "")
             for meter in meters:
                 combo.addItem(meter, meter)
+        max_time = self.feature_table["timestamp_local"].max()
+        if hasattr(max_time, "strftime"):
+            self.weather_month_combo.clear()
+            self.weather_month_combo.addItems(month_options(max_time))
+            self.weather_month_combo.setCurrentText(max_time.strftime("%Y-%m"))
 
     def train(self):
         if self.feature_table is None:
@@ -279,16 +297,29 @@ class MainWindow(WorkerMixin):
         def task():
             meter = self.forecast_meter_combo.currentData()
             meters = [meter] if meter else list(self.trained_models.keys())
+            weather = monthly_average_temperature(
+                self.weather_location_combo.currentText(),
+                self.weather_month_combo.currentText(),
+            )
             request = ForecastRequest(
                 meters=meters,
                 horizon_hours=int(self.horizon_combo.currentData()),
-                temperature_c=float(self.temperature_spin.value()),
+                temperature_c=weather.average_c,
+                weather_location=weather.location_label,
+                weather_month=weather.month,
             )
-            return forecast_dataframe(self.trained_models, self.feature_table, request)
+            forecast = forecast_dataframe(
+                self.trained_models, self.feature_table, request
+            )
+            return weather, forecast
 
         def success(result):
+            weather, result = result
             self.forecast_df = result
             self.forecast_button.setEnabled(True)
+            self.weather_location_combo.setCurrentText(weather.location_label)
+            self.weather_month_combo.setCurrentText(weather.month)
+            self.temperature_label.setText(f"Avg Temp: {weather.average_c:.1f} C")
             _fill_table(self.forecast_table, result.head(500))
             self._plot_forecast(result)
 

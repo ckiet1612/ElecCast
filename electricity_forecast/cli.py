@@ -6,6 +6,11 @@ from pathlib import Path
 from .features import build_feature_table_from_files, feature_summary
 from .models import forecast_dataframe, metrics_to_frame, train_models
 from .types import ForecastRequest
+from .weather import (
+    default_weather_location_label,
+    default_weather_month,
+    monthly_average_temperature,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -28,6 +33,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--temperature-c", type=float, help="Override simulated temperature."
+    )
+    parser.add_argument(
+        "--weather-location",
+        help="Location name or lat,long for Open-Meteo monthly average temperature.",
+    )
+    parser.add_argument(
+        "--weather-month",
+        help="Forecast weather month in YYYY-MM format for Open-Meteo.",
     )
     parser.add_argument(
         "--guest-count", type=float, help="Override simulated guest count."
@@ -56,14 +69,30 @@ def main(argv: list[str] | None = None) -> int:
     print("Feature summary:", feature_summary(features))
     trained, all_metrics = train_models(features, meters=args.meter)
     meters = args.meter or list(trained.keys())
+    temperature_c = args.temperature_c
+    weather_location = None
+    weather_month = None
+    if temperature_c is None and (args.weather_location or args.weather_month):
+        weather = monthly_average_temperature(
+            args.weather_location or default_weather_location_label(),
+            args.weather_month or default_weather_month(),
+        )
+        temperature_c = weather.average_c
+        weather_location = weather.location_label
+        weather_month = weather.month
+        print(
+            f"Weather temperature: {temperature_c:.1f} C ({weather_location}, {weather_month})"
+        )
     forecast = forecast_dataframe(
         trained,
         features,
         ForecastRequest(
             meters=meters,
             horizon_hours=args.horizon,
-            temperature_c=args.temperature_c,
+            temperature_c=temperature_c,
             guest_count=args.guest_count,
+            weather_location=weather_location,
+            weather_month=weather_month,
         ),
     )
     output = Path(args.output)

@@ -368,4 +368,6 @@ def _forecast_row(
         "guest_count": _forecast_guest_count(model, timestamp, request)
         if guest_count is None
         else float(guest_count),
+        "weather_location": request.weather_location,
+        "weather_month": request.weather_month,
     }

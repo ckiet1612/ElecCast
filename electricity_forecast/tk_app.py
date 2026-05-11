@@ -12,6 +12,13 @@ from .features import build_feature_table, feature_summary
 from .models import forecast_dataframe, train_models
 from .paths import default_guests_csv
 from .types import DataPaths, ForecastRequest
+from .weather import (
+    default_weather_month,
+    default_weather_location_label,
+    month_options,
+    monthly_average_temperature,
+    weather_location_labels,
+)
 
 
 def run_app() -> int:
@@ -40,6 +47,9 @@ class ElectricityForecastTk:
         self.forecast_meter = tk.StringVar(value="All meters")
         self.horizon = tk.StringVar(value="168 hours")
         self.temperature = tk.DoubleVar(value=28.0)
+        self.weather_location = tk.StringVar(value=default_weather_location_label())
+        self.weather_month = tk.StringVar(value=default_weather_month())
+        self.weather_result = None
 
         notebook = ttk.Notebook(root)
         notebook.pack(fill="both", expand=True)
@@ -127,10 +137,40 @@ class ElectricityForecastTk:
             width=12,
             state="readonly",
         ).pack(side="left", padx=8)
-        ttk.Label(controls, text="Temp C").pack(side="left")
-        ttk.Spinbox(
-            controls, from_=0, to=50, textvariable=self.temperature, width=6
-        ).pack(side="left", padx=8)
+        ttk.Label(controls, text="Location").pack(side="left")
+        self.weather_location_combo = ttk.Combobox(
+            controls,
+            textvariable=self.weather_location,
+            values=weather_location_labels(),
+            width=24,
+        )
+        self.weather_location_combo.pack(side="left", padx=8)
+        self.weather_location_combo.bind(
+            "<<ComboboxSelected>>", lambda _event: self.update_temperature()
+        )
+        self.weather_location_combo.bind(
+            "<Return>", lambda _event: self.update_temperature()
+        )
+        ttk.Label(controls, text="Month").pack(side="left")
+        self.weather_month_combo = ttk.Combobox(
+            controls,
+            textvariable=self.weather_month,
+            values=month_options(),
+            width=9,
+            state="readonly",
+        )
+        self.weather_month_combo.pack(side="left", padx=8)
+        self.weather_month_combo.bind(
+            "<<ComboboxSelected>>", lambda _event: self.update_temperature()
+        )
+        self.weather_button = ttk.Button(
+            controls, text="Get Temp", command=self.update_temperature
+        )
+        self.weather_button.pack(side="left", padx=(0, 8))
+        self.temperature_status = ttk.Label(
+            controls, text=f"Avg Temp: {self.temperature.get():.1f} C"
+        )
+        self.temperature_status.pack(side="left", padx=(0, 8))
         self.forecast_button = ttk.Button(
             controls, text="Forecast", command=self.forecast
         )
@@ -178,6 +218,15 @@ class ElectricityForecastTk:
 
         self._run_background(task, self._on_trained, self._on_train_failed)
 
+    def update_temperature(self) -> None:
+        self.weather_button.configure(state="disabled")
+        self.temperature_status.configure(text="Fetching weather...")
+        self._run_background(
+            self._fetch_weather_temperature,
+            self._on_weather_loaded,
+            self._on_weather_failed,
+        )
+
     def forecast(self) -> None:
         if self.feature_table is None or not self.trained_models:
             messagebox.showerror(
@@ -189,12 +238,18 @@ class ElectricityForecastTk:
         def task():
             meter = self.forecast_meter.get()
             meters = list(self.trained_models) if meter == "All meters" else [meter]
+            weather = self._fetch_weather_temperature()
             request = ForecastRequest(
                 meters=meters,
                 horizon_hours=_horizon_hours(self.horizon.get()),
-                temperature_c=float(self.temperature.get()),
+                temperature_c=weather.average_c,
+                weather_location=weather.location_label,
+                weather_month=weather.month,
             )
-            return forecast_dataframe(self.trained_models, self.feature_table, request)
+            forecast = forecast_dataframe(
+                self.trained_models, self.feature_table, request
+            )
+            return weather, forecast
 
         self._run_background(task, self._on_forecasted, self._on_forecast_failed)
 
@@ -218,7 +273,13 @@ class ElectricityForecastTk:
         self.train_button.configure(state="normal")
         _fill_tree(self.metrics_tree, self.metrics_df)
 
+    def _on_weather_loaded(self, result) -> None:
+        self.weather_button.configure(state="normal")
+        self._set_weather_temperature(result)
+
     def _on_forecasted(self, result) -> None:
+        weather, result = result
+        self._set_weather_temperature(weather)
         self.forecast_df = result
         self.forecast_button.configure(state="normal")
         _fill_tree(self.forecast_tree, result.head(500))
@@ -232,6 +293,13 @@ class ElectricityForecastTk:
     def _on_train_failed(self, message: str) -> None:
         self.train_button.configure(state="normal")
         messagebox.showerror("Training failed", message)
+
+    def _on_weather_failed(self, message: str) -> None:
+        self.weather_button.configure(state="normal")
+        self.temperature_status.configure(
+            text=f"Avg Temp: {self.temperature.get():.1f} C"
+        )
+        messagebox.showerror("Weather API failed", message)
 
     def _on_forecast_failed(self, message: str) -> None:
         self.forecast_button.configure(state="normal")
@@ -261,6 +329,26 @@ class ElectricityForecastTk:
         values = ["All meters", *meters]
         self.train_meter_combo.configure(values=values)
         self.forecast_meter_combo.configure(values=values)
+        self._sync_weather_month_to_data()
+
+    def _fetch_weather_temperature(self):
+        return monthly_average_temperature(
+            self.weather_location.get(),
+            self.weather_month.get(),
+        )
+
+    def _set_weather_temperature(self, weather) -> None:
+        self.weather_result = weather
+        self.weather_location.set(weather.location_label)
+        self.weather_month.set(weather.month)
+        self.temperature.set(weather.average_c)
+        self.temperature_status.configure(text=f"Avg Temp: {weather.average_c:.1f} C")
+
+    def _sync_weather_month_to_data(self) -> None:
+        max_time = self.feature_table["timestamp_local"].max()
+        if hasattr(max_time, "strftime"):
+            self.weather_month.set(max_time.strftime("%Y-%m"))
+            self.weather_month_combo.configure(values=month_options(max_time))
 
     def _paths(self) -> DataPaths:
         kwh = self.paths["kwh_csv"].get().strip()

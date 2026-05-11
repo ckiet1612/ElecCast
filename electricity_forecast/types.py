@@ -43,6 +43,8 @@ class ForecastRequest:
     start_time: datetime | None = None
     temperature_c: float | None = None
     guest_count: float | None = None
+    weather_location: str | None = None
+    weather_month: str | None = None
 
 
 @dataclass(frozen=True)
