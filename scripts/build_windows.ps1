@@ -44,8 +44,21 @@ if (-not (Test-Path $Exe)) {
     Write-Error "Build finished but $Exe was not created."
 }
 
+$PythonDll = Join-Path $Root "dist\ElectricityForecast\_internal\python310.dll"
+if (-not (Test-Path $PythonDll)) {
+    Write-Error "Build finished but $PythonDll was not created. The app folder is incomplete."
+}
+
+$Zip = Join-Path $Root "dist\ElectricityForecast-windows.zip"
+if (Test-Path $Zip) {
+    Remove-Item $Zip -Force
+}
+Compress-Archive -Path (Join-Path $Root "dist\ElectricityForecast") -DestinationPath $Zip
+
 Write-Host ""
 Write-Host "Built Windows native app:"
 Write-Host "  dist\ElectricityForecast\ElectricityForecast.exe"
+Write-Host "  dist\ElectricityForecast-windows.zip"
 Write-Host ""
-Write-Host "Use the whole dist\ElectricityForecast folder. This is intentional: onedir starts faster than onefile."
+Write-Host "Use the whole dist\ElectricityForecast folder, or unzip ElectricityForecast-windows.zip."
+Write-Host "Do not copy only ElectricityForecast.exe; it needs the _internal folder beside it."
