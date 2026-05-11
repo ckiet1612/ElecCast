@@ -10,6 +10,7 @@ from tkinter import filedialog, messagebox, ttk
 from .data import summarize_paths
 from .features import build_feature_table, feature_summary
 from .models import forecast_dataframe, train_models
+from .paths import default_guests_csv
 from .types import DataPaths, ForecastRequest
 
 
@@ -53,6 +54,7 @@ class ElectricityForecastTk:
         defaults = _default_paths()
         rows = [
             ("kwh_csv", "data_kwh.csv"),
+            ("guests_csv", "sunworld_honthom_hourly_jan2026.csv (khách mặc định)"),
             ("energy_log_csv", "energy_log.csv (optional)"),
             ("pf_csv", "data_pf.csv (optional, slower)"),
             ("current_csv", "data_current.csv (optional, slower)"),
@@ -246,6 +248,7 @@ class ElectricityForecastTk:
             raise ValueError("data_kwh.csv is required.")
         return DataPaths(
             kwh_csv=Path(kwh),
+            guests_csv=_optional_path(self.paths["guests_csv"].get()),
             energy_log_csv=_optional_path(self.paths["energy_log_csv"].get()),
             pf_csv=_optional_path(self.paths["pf_csv"].get()),
             current_csv=_optional_path(self.paths["current_csv"].get()),
@@ -282,7 +285,13 @@ class ElectricityForecastTk:
 def _default_paths() -> dict[str, str]:
     downloads = Path.home() / "Downloads"
     kwh_path = downloads / "data_kwh.csv"
-    return {"kwh_csv": str(kwh_path)} if kwh_path.exists() else {}
+    guests_path = default_guests_csv()
+    paths = {}
+    if kwh_path.exists():
+        paths["kwh_csv"] = str(kwh_path)
+    if guests_path.exists():
+        paths["guests_csv"] = str(guests_path)
+    return paths
 
 
 def _optional_path(value: str) -> Path | None:

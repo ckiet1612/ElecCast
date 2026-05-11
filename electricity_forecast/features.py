@@ -6,6 +6,7 @@ from .data import (
     default_guest_count,
     default_temperature,
     pivot_metric_features,
+    read_guest_counts,
     read_kwh_target,
     read_raw_metric_hourly,
 )
@@ -65,17 +66,24 @@ def build_feature_table(paths: DataPaths):
         features[col] = features.groupby("meter")[col].transform(lambda s: s.ffill().bfill())
         features[col] = features[col].fillna(default)
 
+    if paths.guests_csv:
+        guests = read_guest_counts(paths.guests_csv)
+        features = features.merge(guests, on="timestamp_local", how="left")
+
     features = add_time_features(features)
     features["temperature_c"] = features["timestamp_local"].map(default_temperature)
-    features["guest_count"] = features.apply(
-        lambda row: default_guest_count(row["timestamp_local"], row["area"]), axis=1
-    )
+    simulated_guests = features.apply(lambda row: default_guest_count(row["timestamp_local"], row["area"]), axis=1)
+    if "guest_count" in features:
+        features["guest_count"] = features["guest_count"].fillna(simulated_guests)
+    else:
+        features["guest_count"] = simulated_guests
     features = add_lag_features(features)
     return features.sort_values(["meter", "timestamp_local"]).reset_index(drop=True)
 
 
 def build_feature_table_from_files(
     kwh_csv: str | Path,
+    guests_csv: str | Path | None = None,
     energy_log_csv: str | Path | None = None,
     pf_csv: str | Path | None = None,
     current_csv: str | Path | None = None,
@@ -83,6 +91,7 @@ def build_feature_table_from_files(
 ):
     paths = DataPaths(
         kwh_csv=Path(kwh_csv),
+        guests_csv=Path(guests_csv) if guests_csv else None,
         energy_log_csv=Path(energy_log_csv) if energy_log_csv else None,
         pf_csv=Path(pf_csv) if pf_csv else None,
         current_csv=Path(current_csv) if current_csv else None,

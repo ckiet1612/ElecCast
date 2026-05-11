@@ -62,6 +62,27 @@ def read_kwh_target(kwh_csv: str | Path):
     return df
 
 
+def read_guest_counts(guests_csv: str | Path):
+    import pandas as pd
+
+    path = Path(guests_csv)
+    df = pd.read_csv(path)
+    required = {"datetime", "visitors"}
+    missing = required.difference(df.columns)
+    if missing:
+        raise ValueError(f"{path} missing required columns: {sorted(missing)}")
+
+    guests = df[["datetime", "visitors"]].copy()
+    guests["timestamp_local"] = pd.to_datetime(guests["datetime"], errors="coerce")
+    guests["timestamp_local"] = guests["timestamp_local"].dt.tz_localize(
+        LOCAL_TZ, nonexistent="shift_forward", ambiguous="NaT"
+    )
+    guests["guest_count"] = pd.to_numeric(guests["visitors"], errors="coerce")
+    guests = guests.dropna(subset=["timestamp_local", "guest_count"])
+    guests["timestamp_local"] = guests["timestamp_local"].dt.floor("h")
+    return guests.groupby("timestamp_local", as_index=False)["guest_count"].mean()
+
+
 def read_raw_metric_hourly(
     csv_path: str | Path,
     metrics: Iterable[str],
@@ -156,6 +177,7 @@ def summarize_paths(paths: DataPaths) -> list[dict[str, object]]:
     summaries = []
     for label, value in [
         ("data_kwh", paths.kwh_csv),
+        ("guests", paths.guests_csv),
         ("energy_log", paths.energy_log_csv),
         ("data_pf", paths.pf_csv),
         ("data_current", paths.current_csv),

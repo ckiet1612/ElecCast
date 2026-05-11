@@ -5,6 +5,7 @@ import math
 import pandas as pd
 
 from electricity_forecast.features import add_lag_features, add_time_features
+from electricity_forecast.features import build_feature_table_from_files
 from electricity_forecast.models import forecast_dataframe, train_models
 from electricity_forecast.types import ForecastRequest, LOCAL_TIMEZONE
 
@@ -53,3 +54,20 @@ def test_train_and_forecast_generates_requested_rows():
     assert len(models) == 2
     assert len(forecast) == 2 * 168
     assert forecast["predicted_kwh"].ge(0).all()
+
+
+def test_build_feature_table_uses_guest_csv(tmp_path):
+    kwh_path = tmp_path / "data_kwh.csv"
+    guest_path = tmp_path / "guests.csv"
+    kwh_path.write_text(
+        "name,time,hour,value\n"
+        "System1:PMS_FB2_MSB01_KWH.value.PVLAST,2026-01-01,7,125.5\n",
+        encoding="utf-8",
+    )
+    guest_path.write_text(
+        "datetime,day,hour,visitors\n"
+        "2026-01-01 07:00,Thu,7,331\n",
+        encoding="utf-8",
+    )
+    df = build_feature_table_from_files(kwh_path, guests_csv=guest_path)
+    assert df.iloc[0]["guest_count"] == 331

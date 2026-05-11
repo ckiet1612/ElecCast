@@ -29,6 +29,7 @@ class RawReading:
 @dataclass(frozen=True)
 class DataPaths:
     kwh_csv: Path
+    guests_csv: Path | None = None
     energy_log_csv: Path | None = None
     pf_csv: Path | None = None
     current_csv: Path | None = None

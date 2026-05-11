@@ -6,6 +6,7 @@ from typing import Callable
 from .data import summarize_paths
 from .features import build_feature_table, feature_summary
 from .models import forecast_dataframe, train_models
+from .paths import default_guests_csv
 from .types import DataPaths, ForecastRequest
 
 
@@ -80,6 +81,7 @@ class MainWindow(WorkerMixin):
         defaults = _default_paths()
         labels = [
             ("kwh_csv", "data_kwh.csv"),
+            ("guests_csv", "sunworld_honthom_hourly_jan2026.csv (khách mặc định)"),
             ("energy_log_csv", "energy_log.csv (optional)"),
             ("pf_csv", "data_pf.csv (optional, slower)"),
             ("current_csv", "data_current.csv (optional, slower)"),
@@ -200,6 +202,7 @@ class MainWindow(WorkerMixin):
             raise ValueError("data_kwh.csv is required.")
         return DataPaths(
             kwh_csv=kwh,
+            guests_csv=optional("guests_csv"),
             energy_log_csv=optional("energy_log_csv"),
             pf_csv=optional("pf_csv"),
             current_csv=optional("current_csv"),
@@ -339,7 +342,13 @@ def run_app(argv: list[str]) -> int:
 def _default_paths() -> dict[str, str]:
     downloads = Path.home() / "Downloads"
     kwh_path = downloads / "data_kwh.csv"
-    return {"kwh_csv": str(kwh_path)} if kwh_path.exists() else {}
+    guests_path = default_guests_csv()
+    paths = {}
+    if kwh_path.exists():
+        paths["kwh_csv"] = str(kwh_path)
+    if guests_path.exists():
+        paths["guests_csv"] = str(guests_path)
+    return paths
 
 
 def _make_canvas():

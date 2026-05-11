@@ -12,6 +12,7 @@ from urllib.parse import parse_qs
 from .data import summarize_paths
 from .features import build_feature_table, feature_summary
 from .models import forecast_dataframe, train_models
+from .paths import default_guests_csv
 from .types import DataPaths, ForecastRequest
 
 
@@ -219,6 +220,7 @@ def _render(state: WebState) -> str:
 def _path_inputs(paths: dict[str, str]) -> str:
     labels = {
         "kwh_csv": "data_kwh.csv",
+        "guests_csv": "sunworld_honthom_hourly_jan2026.csv (khách mặc định)",
         "energy_log_csv": "energy_log.csv (optional)",
         "pf_csv": "data_pf.csv (optional, slower)",
         "current_csv": "data_current.csv (optional, slower)",
@@ -321,7 +323,7 @@ def _first(form: dict[str, list[str]], key: str) -> str:
 
 
 def _path_keys() -> list[str]:
-    return ["kwh_csv", "energy_log_csv", "pf_csv", "current_csv", "telemetry_csv"]
+    return ["kwh_csv", "guests_csv", "energy_log_csv", "pf_csv", "current_csv", "telemetry_csv"]
 
 
 def _data_paths(paths: dict[str, str]) -> DataPaths:
@@ -329,6 +331,7 @@ def _data_paths(paths: dict[str, str]) -> DataPaths:
         raise ValueError("data_kwh.csv is required.")
     return DataPaths(
         kwh_csv=Path(paths["kwh_csv"]),
+        guests_csv=_optional(paths.get("guests_csv", "")),
         energy_log_csv=_optional(paths.get("energy_log_csv", "")),
         pf_csv=_optional(paths.get("pf_csv", "")),
         current_csv=_optional(paths.get("current_csv", "")),
@@ -343,7 +346,13 @@ def _optional(value: str) -> Path | None:
 def _default_paths() -> dict[str, str]:
     downloads = Path.home() / "Downloads"
     kwh_path = downloads / "data_kwh.csv"
-    return {"kwh_csv": str(kwh_path)} if kwh_path.exists() else {}
+    guests_path = default_guests_csv()
+    paths = {}
+    if kwh_path.exists():
+        paths["kwh_csv"] = str(kwh_path)
+    if guests_path.exists():
+        paths["guests_csv"] = str(guests_path)
+    return paths
 
 
 def _available_port(host: str, preferred: int) -> int:
