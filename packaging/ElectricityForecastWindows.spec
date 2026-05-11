@@ -3,11 +3,17 @@
 from pathlib import Path
 
 
-ROOT = Path.cwd()
+try:
+    SPEC_DIR = Path(SPECPATH).resolve()
+except NameError:
+    SPEC_DIR = Path(__file__).resolve().parent
+
+ROOT = SPEC_DIR.parent
+ENTRYPOINT = ROOT / "desktop_app.py"
 
 
 a = Analysis(
-    ["desktop_app.py"],
+    [str(ENTRYPOINT)],
     pathex=[str(ROOT)],
     binaries=[],
     datas=[],

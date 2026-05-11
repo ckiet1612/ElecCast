@@ -33,8 +33,16 @@ if (-not (Test-Path $Python)) {
 }
 
 & $Python -m pip install --upgrade pip
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $Python -m pip install -r requirements-windows.txt
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $Python -m PyInstaller --noconfirm --clean packaging\ElectricityForecastWindows.spec
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+$Exe = Join-Path $Root "dist\ElectricityForecast\ElectricityForecast.exe"
+if (-not (Test-Path $Exe)) {
+    Write-Error "Build finished but $Exe was not created."
+}
 
 Write-Host ""
 Write-Host "Built Windows native app:"
