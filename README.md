@@ -10,7 +10,7 @@ The app expects these CSV files:
 - `energy_log.csv`: cumulative KWH readings with `time,name,original_value_float`
 - `data_pf.csv`: power factor readings
 - `data_current.csv`: current readings
-- `data_2026.csv`: wide electrical telemetry source including `P`, `PF`, current, and `KWH`
+- `data_2026.csv`: wide electrical telemetry source including `P`, `PF`, current, and cumulative `KWH`
 
 Raw timestamped CSV files are treated as UTC and converted to `Asia/Ho_Chi_Minh`. `data_kwh.csv` is treated as already local because it has separate `time` and `hour` columns.
 
@@ -46,6 +46,10 @@ ELECTRICITY_FORECAST_UI=web python -m electricity_forecast.app
 
 The Forecast tab uses Open-Meteo to fetch the average monthly temperature from a selected location and month. The default location is `Hòn Thơm, Phú Quốc`; you can choose another preset location or type a place name / `lat,long`. Internet access is required for this API lookup.
 
+## Anomaly Detection
+
+The Anomaly tab uses Isolation Forest to flag unusual hourly readings. It prioritizes hourly kWh deltas calculated from cumulative `KWH` in `data_2026.csv`, then falls back to `data_kwh.csv` when telemetry deltas are missing or invalid. Results include anomaly score, severity, and a short reason such as low PF, high current, kWh spike, or telemetry reset/outlier.
+
 ## CLI Smoke Workflow
 
 ```bash
@@ -58,6 +62,19 @@ python -m electricity_forecast.cli \
   --weather-month 2026-01 \
   --horizon 168 \
   --output exports/forecast_168h.csv
+```
+
+CLI anomaly run:
+
+```bash
+python -m electricity_forecast.cli \
+  --kwh /Users/macbook/Downloads/data_kwh.csv \
+  --pf /Users/macbook/Downloads/data_pf.csv \
+  --current /Users/macbook/Downloads/data_current.csv \
+  --telemetry /Users/macbook/Downloads/data_2026.csv \
+  --detect-anomalies \
+  --anomaly-contamination 0.05 \
+  --anomaly-output exports/anomalies.csv
 ```
 
 ## Package macOS App

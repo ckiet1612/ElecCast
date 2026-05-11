@@ -6,6 +6,7 @@ from .data import (
     default_guest_count,
     default_temperature,
     pivot_metric_features,
+    read_cumulative_kwh_hourly,
     read_guest_counts,
     read_kwh_target,
     read_raw_metric_hourly,
@@ -35,9 +36,11 @@ NUMERIC_FEATURE_COLUMNS = [
 def build_feature_table(paths: DataPaths):
     target = read_kwh_target(paths.kwh_csv)
     feature_frames = []
+    telemetry_kwh = None
     if paths.telemetry_csv:
         telemetry = read_raw_metric_hourly(paths.telemetry_csv, ["P", "PF", "IAVG"])
         feature_frames.append(pivot_metric_features(telemetry))
+        telemetry_kwh = read_cumulative_kwh_hourly(paths.telemetry_csv)
     if paths.pf_csv:
         pf = read_raw_metric_hourly(paths.pf_csv, ["PF"])
         feature_frames.append(pivot_metric_features(pf))
@@ -75,6 +78,7 @@ def build_feature_table(paths: DataPaths):
         features = features.merge(guests, on="timestamp_local", how="left")
 
     features = add_time_features(features)
+    features = add_detection_kwh(features, telemetry_kwh)
     features["temperature_c"] = features["timestamp_local"].map(default_temperature)
     simulated_guests = features.apply(
         lambda row: default_guest_count(row["timestamp_local"], row["area"]), axis=1
@@ -85,6 +89,30 @@ def build_feature_table(paths: DataPaths):
         features["guest_count"] = simulated_guests
     features = add_lag_features(features)
     return features.sort_values(["meter", "timestamp_local"]).reset_index(drop=True)
+
+
+def add_detection_kwh(df, telemetry_kwh):
+    import pandas as pd
+
+    data = df.copy()
+    if telemetry_kwh is not None and not telemetry_kwh.empty:
+        data = data.merge(
+            telemetry_kwh,
+            on=["timestamp_local", "meter", "area"],
+            how="left",
+        )
+    for column in ["kwh_cumulative", "kwh_telemetry_raw_delta", "kwh_telemetry"]:
+        if column not in data:
+            data[column] = pd.NA
+        data[column] = pd.to_numeric(data[column], errors="coerce")
+    if "kwh_telemetry_issue" not in data:
+        data["kwh_telemetry_issue"] = ""
+    data["kwh_telemetry_issue"] = data["kwh_telemetry_issue"].fillna("")
+    data["kwh_detection"] = data["kwh_telemetry"].combine_first(data["kwh"])
+    data["kwh_source"] = "missing"
+    data.loc[data["kwh"].notna(), "kwh_source"] = "data_kwh"
+    data.loc[data["kwh_telemetry"].notna(), "kwh_source"] = "data_2026"
+    return data
 
 
 def build_feature_table_from_files(
@@ -109,6 +137,7 @@ def build_feature_table_from_files(
 def add_time_features(df):
     data = df.copy()
     ts = data["timestamp_local"]
+    data["minute"] = ts.dt.minute
     data["hour"] = ts.dt.hour
     data["day_of_week"] = ts.dt.dayofweek
     data["day_of_month"] = ts.dt.day
@@ -169,5 +198,8 @@ def feature_summary(df) -> dict[str, object]:
         "min_time": str(df["timestamp_local"].min()),
         "max_time": str(df["timestamp_local"].max()),
         "missing_kwh": int(df["kwh"].isna().sum()),
+        "missing_kwh_detection": int(df["kwh_detection"].isna().sum())
+        if "kwh_detection" in df
+        else 0,
         "columns": list(df.columns),
     }

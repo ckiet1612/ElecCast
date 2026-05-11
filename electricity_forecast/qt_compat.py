@@ -14,6 +14,7 @@ try:
     )
     from PyQt6.QtWidgets import (
         QApplication,
+        QCheckBox,
         QComboBox,
         QDoubleSpinBox,
         QFileDialog,
@@ -47,6 +48,7 @@ except ModuleNotFoundError:
     )
     from PySide6.QtWidgets import (
         QApplication,
+        QCheckBox,
         QComboBox,
         QDoubleSpinBox,
         QFileDialog,

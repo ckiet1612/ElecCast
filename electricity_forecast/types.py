@@ -58,6 +58,33 @@ class ForecastResult:
     upper_kwh: float | None = None
 
 
+@dataclass(frozen=True)
+class AnomalyRequest:
+    meters: list[str] | None = None
+    contamination: float = 0.05
+    max_rows: int | None = None
+    source_policy: str = "prefer_telemetry"
+    only_anomalies: bool = False
+
+
+@dataclass(frozen=True)
+class AnomalyResult:
+    timestamp_local: datetime
+    meter: str
+    area: str
+    anomaly_score: float
+    severity: str
+    is_anomaly: bool
+    reason: str
+    kwh: float | None
+    pf: float | None
+    iavg: float | None
+    p: float | None
+    temperature_c: float | None
+    guest_count: float | None
+    kwh_source: str
+
+
 @dataclass
 class MeterModelMetrics:
     meter: str

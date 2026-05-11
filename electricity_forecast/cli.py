@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from .anomaly import detect_anomalies as run_anomaly_detection
 from .features import build_feature_table_from_files, feature_summary
 from .models import forecast_dataframe, metrics_to_frame, train_models
-from .types import ForecastRequest
+from .types import AnomalyRequest, ForecastRequest
 from .weather import (
     default_weather_location_label,
     default_weather_month,
@@ -46,6 +47,32 @@ def build_parser() -> argparse.ArgumentParser:
         "--guest-count", type=float, help="Override simulated guest count."
     )
     parser.add_argument(
+        "--detect-anomalies",
+        action="store_true",
+        help="Run Isolation Forest anomaly detection instead of forecast training.",
+    )
+    parser.add_argument(
+        "--anomaly-meter",
+        action="append",
+        help="Meter to include in anomaly detection. Repeat for multiple meters.",
+    )
+    parser.add_argument(
+        "--anomaly-contamination",
+        type=float,
+        default=0.05,
+        help="Expected anomaly fraction for Isolation Forest.",
+    )
+    parser.add_argument(
+        "--anomaly-output",
+        default="exports/anomalies.csv",
+        help="Anomaly CSV output path.",
+    )
+    parser.add_argument(
+        "--anomaly-max-rows",
+        type=int,
+        help="Optional max rows to analyze for faster CLI smoke runs.",
+    )
+    parser.add_argument(
         "--output", default="exports/forecast.csv", help="Forecast CSV output path."
     )
     parser.add_argument(
@@ -67,6 +94,22 @@ def main(argv: list[str] | None = None) -> int:
         telemetry_csv=args.telemetry,
     )
     print("Feature summary:", feature_summary(features))
+    if args.detect_anomalies:
+        anomalies = run_anomaly_detection(
+            features,
+            AnomalyRequest(
+                meters=args.anomaly_meter or args.meter,
+                contamination=args.anomaly_contamination,
+                max_rows=args.anomaly_max_rows,
+            ),
+        )
+        anomaly_output = Path(args.anomaly_output)
+        anomaly_output.parent.mkdir(parents=True, exist_ok=True)
+        anomalies.to_csv(anomaly_output, index=False)
+        print(f"Wrote anomalies: {anomaly_output}")
+        print(anomalies[anomalies["is_anomaly"]].head(20).to_string(index=False))
+        return 0
+
     trained, all_metrics = train_models(features, meters=args.meter)
     meters = args.meter or list(trained.keys())
     temperature_c = args.temperature_c

@@ -4,10 +4,11 @@ import math
 
 import pandas as pd
 
+from electricity_forecast.anomaly import detect_anomalies
 from electricity_forecast.features import add_lag_features, add_time_features
 from electricity_forecast.features import build_feature_table_from_files
 from electricity_forecast.models import forecast_dataframe, train_models
-from electricity_forecast.types import ForecastRequest, LOCAL_TIMEZONE
+from electricity_forecast.types import AnomalyRequest, ForecastRequest, LOCAL_TIMEZONE
 
 
 def synthetic_features(meters=("FB2_MSB01", "SHOW_MSB01"), periods=240):
@@ -79,3 +80,50 @@ def test_build_feature_table_uses_guest_csv(tmp_path):
     )
     df = build_feature_table_from_files(kwh_path, guests_csv=guest_path)
     assert df.iloc[0]["guest_count"] == 331
+
+
+def test_build_feature_table_prefers_telemetry_kwh_for_detection(tmp_path):
+    kwh_path = tmp_path / "data_kwh.csv"
+    telemetry_path = tmp_path / "data_2026.csv"
+    kwh_path.write_text(
+        "name,time,hour,value\n"
+        "System1:PMS_FB2_MSB01_KWH.value.PVLAST,2026-01-01,7,125.5\n"
+        "System1:PMS_FB2_MSB01_KWH.value.PVLAST,2026-01-01,8,130.5\n",
+        encoding="utf-8",
+    )
+    telemetry_path.write_text(
+        "time,name,original_value_float\n"
+        "2026-01-01 00:00:00+00,System1:PMS_FB2_MSB01_KWH.value.PVLAST,100\n"
+        "2026-01-01 01:00:00+00,System1:PMS_FB2_MSB01_KWH.value.PVLAST,112\n",
+        encoding="utf-8",
+    )
+    df = build_feature_table_from_files(kwh_path, telemetry_csv=telemetry_path)
+    rows = df.sort_values("timestamp_local").reset_index(drop=True)
+    assert rows.iloc[0]["kwh_detection"] == 125.5
+    assert rows.iloc[0]["kwh_source"] == "data_kwh"
+    assert rows.iloc[1]["kwh_detection"] == 12
+    assert rows.iloc[1]["kwh_source"] == "data_2026"
+
+
+def test_detect_anomalies_returns_scores_and_reasons():
+    features = synthetic_features(meters=("FB2_MSB01",), periods=80)
+    features["kwh_detection"] = features["kwh"]
+    features["kwh_source"] = "data_kwh"
+    features["kwh_telemetry_issue"] = ""
+    target_index = features.index[-1]
+    features.loc[target_index, "kwh_detection"] = features["kwh"].median() * 12
+    features.loc[target_index, "pf"] = 0.5
+    features.loc[target_index, "iavg"] = features["iavg"].median() * 8
+    features.loc[target_index, "guest_count"] = 1
+    features.loc[target_index, "kwh_telemetry_issue"] = "kwh_delta_outlier"
+    result = detect_anomalies(
+        features,
+        AnomalyRequest(meters=["FB2_MSB01"], contamination=0.05),
+    )
+    assert not result.empty
+    assert result["anomaly_score"].notna().all()
+    assert result["is_anomaly"].dtype == bool
+    assert set(result["severity"]).issubset({"Normal", "Medium", "High"})
+    anomalies = result[result["is_anomaly"]]
+    assert not anomalies.empty
+    assert anomalies["reason"].str.contains("KWH telemetry delta outlier").any()

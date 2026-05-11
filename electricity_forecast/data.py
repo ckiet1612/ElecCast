@@ -95,6 +95,7 @@ def read_raw_metric_hourly(
     csv_path: str | Path,
     metrics: Iterable[str],
     chunksize: int = 250_000,
+    aggfunc: str = "mean",
 ):
     """Read large raw CSV files and aggregate selected metrics to hourly means."""
     import pandas as pd
@@ -117,9 +118,7 @@ def read_raw_metric_hourly(
         )
         chunk["value"] = pd.to_numeric(chunk[RAW_VALUE_COLUMN], errors="coerce")
         chunk = chunk.dropna(subset=["timestamp_local", "meter", "value"])
-        grouped = chunk.groupby(
-            ["timestamp_local", "meter", "area", "metric"], as_index=False
-        )["value"].mean()
+        grouped = _aggregate_metric_chunk(chunk, aggfunc)
         chunks.append(grouped)
 
     if not chunks:
@@ -128,9 +127,78 @@ def read_raw_metric_hourly(
         )
 
     data = pd.concat(chunks, ignore_index=True)
-    return data.groupby(["timestamp_local", "meter", "area", "metric"], as_index=False)[
-        "value"
-    ].mean()
+    grouped = data.groupby(
+        ["timestamp_local", "meter", "area", "metric"], as_index=False
+    )["value"]
+    if aggfunc == "max":
+        return grouped.max()
+    return grouped.mean()
+
+
+def read_cumulative_kwh_hourly(
+    csv_path: str | Path,
+    chunksize: int = 250_000,
+):
+    """Read cumulative KWH telemetry and convert it to hourly consumption deltas."""
+    import pandas as pd
+
+    raw = read_raw_metric_hourly(csv_path, ["KWH"], chunksize=chunksize, aggfunc="max")
+    columns = [
+        "timestamp_local",
+        "meter",
+        "area",
+        "kwh_cumulative",
+        "kwh_telemetry_raw_delta",
+        "kwh_telemetry",
+        "kwh_telemetry_issue",
+    ]
+    if raw.empty:
+        return pd.DataFrame(columns=columns)
+
+    raw = raw.rename(columns={"value": "kwh_cumulative"})
+    raw = raw[["timestamp_local", "meter", "area", "kwh_cumulative"]].copy()
+    pieces = []
+    for _, group in raw.sort_values(["meter", "timestamp_local"]).groupby("meter"):
+        meter_data = group.copy()
+        raw_delta = meter_data["kwh_cumulative"].diff()
+        issue = pd.Series("", index=meter_data.index, dtype="object")
+        issue = issue.mask(raw_delta < 0, "kwh_reset_or_negative_delta")
+        high_limit = _large_delta_limit(raw_delta)
+        issue = issue.mask(
+            raw_delta.notna() & raw_delta.gt(high_limit),
+            "kwh_delta_outlier",
+        )
+        valid_delta = raw_delta.mask(issue.ne("") | raw_delta.isna())
+        meter_data["kwh_telemetry_raw_delta"] = raw_delta
+        meter_data["kwh_telemetry"] = valid_delta
+        meter_data["kwh_telemetry_issue"] = issue
+        pieces.append(meter_data)
+
+    return pd.concat(pieces, ignore_index=True)[columns]
+
+
+def _aggregate_metric_chunk(chunk, aggfunc: str):
+    grouped = chunk.groupby(
+        ["timestamp_local", "meter", "area", "metric"], as_index=False
+    )["value"]
+    if aggfunc == "max":
+        return grouped.max()
+    return grouped.mean()
+
+
+def _large_delta_limit(delta) -> float:
+    positive = delta[delta > 0].dropna()
+    if len(positive) < 4:
+        return math.inf
+    q1 = positive.quantile(0.25)
+    q3 = positive.quantile(0.75)
+    iqr = q3 - q1
+    median = positive.median()
+    if iqr > 0:
+        return float(max(q3 + 6 * iqr, median * 8, q3))
+    if median > 0:
+        return float(median * 8)
+    return math.inf
 
 
 def pivot_metric_features(raw_hourly):

@@ -9,11 +9,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs
 
+from .anomaly import detect_anomalies as run_anomaly_detection
 from .data import summarize_paths
 from .features import build_feature_table, feature_summary
 from .models import forecast_dataframe, train_models
 from .paths import default_guests_csv
-from .types import DataPaths, ForecastRequest
+from .types import AnomalyRequest, DataPaths, ForecastRequest
 from .weather import (
     default_weather_month,
     default_weather_location_label,
@@ -30,6 +31,8 @@ class WebState:
     trained_models: dict = field(default_factory=dict)
     metrics_df: object | None = None
     forecast_df: object | None = None
+    anomaly_df: object | None = None
+    anomaly_only: bool = True
     weather_result: object | None = None
     message: str = ""
     error: str = ""
@@ -64,6 +67,9 @@ def _handler(state: WebState):
             if self.path.startswith("/download/metrics"):
                 self._download_df(state.metrics_df, "metrics.csv")
                 return
+            if self.path.startswith("/download/anomalies"):
+                self._download_df(state.anomaly_df, "anomalies.csv")
+                return
             self._send_html(_render(state))
 
         def do_POST(self):
@@ -77,6 +83,8 @@ def _handler(state: WebState):
                     _train_action(state, form)
                 elif action == "forecast":
                     _forecast_action(state, form)
+                elif action == "anomaly":
+                    _anomaly_action(state, form)
                 else:
                     state.error = f"Unknown action: {action}"
             except Exception as exc:  # pragma: no cover - UI safety net
@@ -126,6 +134,7 @@ def _import_action(state: WebState, form: dict[str, list[str]]) -> None:
     state.trained_models = {}
     state.metrics_df = None
     state.forecast_df = None
+    state.anomaly_df = None
     state.weather_result = None
     state.message = "Imported data and built feature table."
 
@@ -166,6 +175,23 @@ def _forecast_action(state: WebState, form: dict[str, list[str]]) -> None:
     )
     state.weather_result = weather
     state.message = "Forecast completed."
+
+
+def _anomaly_action(state: WebState, form: dict[str, list[str]]) -> None:
+    state.error = ""
+    if state.feature_table is None:
+        raise ValueError("Import data before detecting anomalies.")
+    meter = _first(form, "anomaly_meter")
+    meters = None if not meter or meter == "All meters" else [meter]
+    state.anomaly_only = _first(form, "anomaly_only") == "on"
+    state.anomaly_df = run_anomaly_detection(
+        state.feature_table,
+        AnomalyRequest(
+            meters=meters,
+            contamination=float(_first(form, "anomaly_contamination") or 0.05),
+        ),
+    )
+    state.message = "Anomaly detection completed."
 
 
 def _render(state: WebState) -> str:
@@ -233,9 +259,21 @@ def _render(state: WebState) -> str:
     {_df_table(state.forecast_df.head(500) if state.forecast_df is not None else None)}
   </section>
   <section>
+    <h2>Anomaly</h2>
+    <form method="post" action="/anomaly" class="row">
+      <div><label>Meter</label>{_meter_select("anomaly_meter", meters)}</div>
+      <div><label>Contamination</label><input name="anomaly_contamination" value="0.05"></div>
+      <div><label>Only anomalies</label><input type="checkbox" name="anomaly_only" {_checked(state.anomaly_only)}></div>
+      <button type="submit">Detect Anomalies</button>
+    </form>
+    {_anomaly_svg(state.anomaly_df)}
+    {_df_table(_anomaly_table_df(state))}
+  </section>
+  <section>
     <h2>Export</h2>
     <a class="button" href="/download/forecast">Download Forecast CSV</a>
     <a class="button" href="/download/metrics">Download Metrics CSV</a>
+    <a class="button" href="/download/anomalies">Download Anomaly CSV</a>
   </section>
 </main>
 </body>
@@ -383,6 +421,70 @@ def _forecast_svg(df) -> str:
         )
     lines.append("</svg>")
     return "".join(lines)
+
+
+def _anomaly_svg(df) -> str:
+    if df is None or df.empty:
+        return ""
+    subset = df.copy()
+    meters = list(subset["meter"].unique())[:8]
+    subset = subset[subset["meter"].isin(meters)].sort_values(
+        ["meter", "timestamp_local"]
+    )
+    values = subset["kwh"].astype(float)
+    min_y, max_y = float(values.min()), float(values.max())
+    span = max(max_y - min_y, 1.0)
+    width, height = 1000, 260
+    colors = [
+        "#0969da",
+        "#1a7f37",
+        "#8250df",
+        "#9a6700",
+        "#0550ae",
+        "#57606a",
+        "#bf3989",
+        "#116329",
+    ]
+    lines = [f'<svg viewBox="0 0 {width} {height}" role="img">']
+    lines.append('<line x1="40" y1="220" x2="980" y2="220" stroke="#d8dee4"/>')
+    lines.append('<line x1="40" y1="20" x2="40" y2="220" stroke="#d8dee4"/>')
+    for idx, meter in enumerate(meters):
+        group = subset[subset["meter"].eq(meter)].reset_index(drop=True)
+        if len(group) < 2:
+            continue
+        points = []
+        for row_idx, row in group.iterrows():
+            x = 40 + (row_idx / max(len(group) - 1, 1)) * 940
+            y = 220 - ((float(row["kwh"]) - min_y) / span) * 190
+            points.append(f"{x:.1f},{y:.1f}")
+        color = colors[idx % len(colors)]
+        lines.append(
+            f'<polyline points="{" ".join(points)}" fill="none" stroke="{color}" stroke-width="2" opacity="0.65"/>'
+        )
+        anomalies = group[group["is_anomaly"]]
+        for row_idx, row in anomalies.iterrows():
+            x = 40 + (row_idx / max(len(group) - 1, 1)) * 940
+            y = 220 - ((float(row["kwh"]) - min_y) / span) * 190
+            fill = "#d1242f" if row["severity"] == "High" else "#fb8500"
+            lines.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="{fill}"/>')
+        lines.append(
+            f'<text x="{50 + idx * 115}" y="16" fill="{color}" font-size="12">{html.escape(meter)}</text>'
+        )
+    lines.append("</svg>")
+    return "".join(lines)
+
+
+def _anomaly_table_df(state: WebState):
+    if state.anomaly_df is None:
+        return None
+    data = state.anomaly_df
+    if state.anomaly_only:
+        data = data[data["is_anomaly"]]
+    return data.head(500)
+
+
+def _checked(value: bool) -> str:
+    return "checked" if value else ""
 
 
 def _meter_select(name: str, meters: list[str]) -> str:

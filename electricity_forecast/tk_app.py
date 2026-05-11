@@ -7,11 +7,12 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from .anomaly import detect_anomalies as run_anomaly_detection
 from .data import summarize_paths
 from .features import build_feature_table, feature_summary
 from .models import forecast_dataframe, train_models
 from .paths import default_guests_csv
-from .types import DataPaths, ForecastRequest
+from .types import AnomalyRequest, DataPaths, ForecastRequest
 from .weather import (
     default_weather_month,
     default_weather_location_label,
@@ -41,10 +42,14 @@ class ElectricityForecastTk:
         self.trained_models = {}
         self.metrics_df = None
         self.forecast_df = None
+        self.anomaly_df = None
 
         self.paths: dict[str, tk.StringVar] = {}
         self.train_meter = tk.StringVar(value="All meters")
         self.forecast_meter = tk.StringVar(value="All meters")
+        self.anomaly_meter = tk.StringVar(value="All meters")
+        self.anomaly_contamination = tk.DoubleVar(value=0.05)
+        self.anomaly_only = tk.BooleanVar(value=True)
         self.horizon = tk.StringVar(value="168 hours")
         self.temperature = tk.DoubleVar(value=28.0)
         self.weather_location = tk.StringVar(value=default_weather_location_label())
@@ -57,6 +62,7 @@ class ElectricityForecastTk:
         self._build_data_tab(notebook)
         self._build_training_tab(notebook)
         self._build_forecast_tab(notebook)
+        self._build_anomaly_tab(notebook)
         self._build_export_tab(notebook)
 
     def _build_data_tab(self, notebook: ttk.Notebook) -> None:
@@ -181,6 +187,41 @@ class ElectricityForecastTk:
         self.forecast_tree = _tree(frame)
         self.forecast_tree.pack(fill="both", expand=True, pady=(8, 0))
 
+    def _build_anomaly_tab(self, notebook: ttk.Notebook) -> None:
+        frame = ttk.Frame(notebook, padding=12)
+        notebook.add(frame, text="Anomaly")
+        controls = ttk.Frame(frame)
+        controls.pack(fill="x", pady=(0, 8))
+        ttk.Label(controls, text="Meter").pack(side="left")
+        self.anomaly_meter_combo = ttk.Combobox(
+            controls, textvariable=self.anomaly_meter, values=["All meters"], width=28
+        )
+        self.anomaly_meter_combo.pack(side="left", padx=8)
+        ttk.Label(controls, text="Contamination").pack(side="left")
+        ttk.Spinbox(
+            controls,
+            from_=0.01,
+            to=0.20,
+            increment=0.01,
+            textvariable=self.anomaly_contamination,
+            width=6,
+        ).pack(side="left", padx=8)
+        ttk.Checkbutton(
+            controls,
+            text="Only anomalies",
+            variable=self.anomaly_only,
+            command=self._refresh_anomaly_table,
+        ).pack(side="left", padx=8)
+        self.anomaly_button = ttk.Button(
+            controls, text="Detect Anomalies", command=self.detect_anomalies
+        )
+        self.anomaly_button.pack(side="left")
+
+        self.anomaly_chart_frame = ttk.Frame(frame)
+        self.anomaly_chart_frame.pack(fill="both", expand=True)
+        self.anomaly_tree = _tree(frame)
+        self.anomaly_tree.pack(fill="both", expand=True, pady=(8, 0))
+
     def _build_export_tab(self, notebook: ttk.Notebook) -> None:
         frame = ttk.Frame(notebook, padding=12)
         notebook.add(frame, text="Export")
@@ -188,6 +229,9 @@ class ElectricityForecastTk:
             anchor="w", pady=4
         )
         ttk.Button(frame, text="Save Metrics CSV", command=self.save_metrics).pack(
+            anchor="w", pady=4
+        )
+        ttk.Button(frame, text="Save Anomaly CSV", command=self.save_anomalies).pack(
             anchor="w", pady=4
         )
         self.export_status = ttk.Label(frame, text="")
@@ -253,17 +297,38 @@ class ElectricityForecastTk:
 
         self._run_background(task, self._on_forecasted, self._on_forecast_failed)
 
+    def detect_anomalies(self) -> None:
+        if self.feature_table is None:
+            messagebox.showerror("Error", "Import data before detecting anomalies.")
+            return
+        self.anomaly_button.configure(state="disabled")
+
+        def task():
+            meter = self.anomaly_meter.get()
+            meters = None if meter == "All meters" else [meter]
+            request = AnomalyRequest(
+                meters=meters,
+                contamination=float(self.anomaly_contamination.get()),
+            )
+            return run_anomaly_detection(self.feature_table, request)
+
+        self._run_background(task, self._on_anomalies_detected, self._on_anomaly_failed)
+
     def save_forecast(self) -> None:
         self._save_df(self.forecast_df, "forecast.csv")
 
     def save_metrics(self) -> None:
         self._save_df(self.metrics_df, "metrics.csv")
 
+    def save_anomalies(self) -> None:
+        self._save_df(self.anomaly_df, "anomalies.csv")
+
     def _on_imported(self, result) -> None:
         summaries, features, summary = result
         self.feature_table = features
         self.data_status.configure(text="Loaded")
         self.import_button.configure(state="normal")
+        self.anomaly_df = None
         self.data_summary.delete("1.0", "end")
         self.data_summary.insert("1.0", _format_summary(summaries, summary))
         self._refresh_meters()
@@ -285,6 +350,12 @@ class ElectricityForecastTk:
         _fill_tree(self.forecast_tree, result.head(500))
         self._plot_forecast(result)
 
+    def _on_anomalies_detected(self, result) -> None:
+        self.anomaly_df = result
+        self.anomaly_button.configure(state="normal")
+        self._refresh_anomaly_table()
+        self._plot_anomalies(result)
+
     def _on_import_failed(self, message: str) -> None:
         self.import_button.configure(state="normal")
         self.data_status.configure(text="Error")
@@ -305,6 +376,10 @@ class ElectricityForecastTk:
         self.forecast_button.configure(state="normal")
         messagebox.showerror("Forecast failed", message)
 
+    def _on_anomaly_failed(self, message: str) -> None:
+        self.anomaly_button.configure(state="normal")
+        messagebox.showerror("Anomaly detection failed", message)
+
     def _plot_forecast(self, df) -> None:
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
         from matplotlib.figure import Figure
@@ -324,12 +399,53 @@ class ElectricityForecastTk:
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
 
+    def _plot_anomalies(self, df) -> None:
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+        from matplotlib.figure import Figure
+
+        for child in self.anomaly_chart_frame.winfo_children():
+            child.destroy()
+        fig = Figure(figsize=(9, 3.8), tight_layout=True)
+        ax = fig.add_subplot(111)
+        if df is not None and not df.empty:
+            plot_df = df.sort_values(["meter", "timestamp_local"])
+            for meter, group in plot_df.groupby("meter"):
+                ax.plot(group["timestamp_local"], group["kwh"], label=meter, alpha=0.65)
+            anomalies = plot_df[plot_df["is_anomaly"]]
+            if not anomalies.empty:
+                colors = (
+                    anomalies["severity"].map({"High": "#d1242f"}).fillna("#fb8500")
+                )
+                ax.scatter(
+                    anomalies["timestamp_local"],
+                    anomalies["kwh"],
+                    c=colors,
+                    s=32,
+                    zorder=3,
+                )
+            ax.set_xlabel("Time")
+            ax.set_ylabel("kWh")
+            ax.legend(loc="upper left", fontsize="small", ncols=2)
+            fig.autofmt_xdate()
+        canvas = FigureCanvasTkAgg(fig, master=self.anomaly_chart_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
     def _refresh_meters(self) -> None:
         meters = sorted(self.feature_table["meter"].dropna().unique())
         values = ["All meters", *meters]
         self.train_meter_combo.configure(values=values)
         self.forecast_meter_combo.configure(values=values)
+        self.anomaly_meter_combo.configure(values=values)
         self._sync_weather_month_to_data()
+
+    def _refresh_anomaly_table(self) -> None:
+        if self.anomaly_df is None:
+            return
+        data = self.anomaly_df
+        if self.anomaly_only.get():
+            data = data[data["is_anomaly"]]
+        _fill_tree(self.anomaly_tree, data.head(500))
 
     def _fetch_weather_temperature(self):
         return monthly_average_temperature(

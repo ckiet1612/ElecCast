@@ -3,11 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
+from .anomaly import detect_anomalies as run_anomaly_detection
 from .data import summarize_paths
 from .features import build_feature_table, feature_summary
 from .models import forecast_dataframe, train_models
 from .paths import default_guests_csv
-from .types import DataPaths, ForecastRequest
+from .types import AnomalyRequest, DataPaths, ForecastRequest
 from .weather import (
     default_weather_month,
     default_weather_location_label,
@@ -51,7 +52,9 @@ class WorkerMixin:
 class MainWindow(WorkerMixin):
     def __init__(self):
         from .qt_compat import (
+            QCheckBox,
             QComboBox,
+            QDoubleSpinBox,
             QFormLayout,
             QGridLayout,
             QHBoxLayout,
@@ -75,6 +78,7 @@ class MainWindow(WorkerMixin):
         self.trained_models = {}
         self.metrics_df = None
         self.forecast_df = None
+        self.anomaly_df = None
 
         root = QWidget()
         self.tabs = QTabWidget()
@@ -179,15 +183,50 @@ class MainWindow(WorkerMixin):
         forecast_layout.addWidget(self.forecast_table, stretch=1)
         self.tabs.addTab(forecast_tab, "Forecast")
 
+        anomaly_tab = QWidget()
+        anomaly_layout = QVBoxLayout(anomaly_tab)
+        anomaly_controls = QHBoxLayout()
+        self.anomaly_meter_combo = QComboBox()
+        self.anomaly_meter_combo.addItem("All meters", "")
+        self.anomaly_contamination_spin = QDoubleSpinBox()
+        self.anomaly_contamination_spin.setRange(0.01, 0.20)
+        self.anomaly_contamination_spin.setSingleStep(0.01)
+        self.anomaly_contamination_spin.setDecimals(2)
+        self.anomaly_contamination_spin.setValue(0.05)
+        self.anomaly_only_check = QCheckBox("Only anomalies")
+        self.anomaly_only_check.setChecked(True)
+        self.anomaly_only_check.stateChanged.connect(self._refresh_anomaly_table)
+        self.anomaly_button = QPushButton("Detect Anomalies")
+        self.anomaly_button.clicked.connect(self.detect_anomalies)
+        for widget in [
+            QLabel("Meter"),
+            self.anomaly_meter_combo,
+            QLabel("Contamination"),
+            self.anomaly_contamination_spin,
+            self.anomaly_only_check,
+            self.anomaly_button,
+        ]:
+            anomaly_controls.addWidget(widget)
+        anomaly_controls.addStretch()
+        anomaly_layout.addLayout(anomaly_controls)
+        self.anomaly_figure, self.anomaly_canvas = _make_canvas()
+        anomaly_layout.addWidget(self.anomaly_canvas, stretch=2)
+        self.anomaly_table = QTableWidget()
+        anomaly_layout.addWidget(self.anomaly_table, stretch=1)
+        self.tabs.addTab(anomaly_tab, "Anomaly")
+
         export_tab = QWidget()
         export_layout = QFormLayout(export_tab)
         self.export_forecast_button = QPushButton("Save Forecast CSV")
         self.export_forecast_button.clicked.connect(self.save_forecast)
         self.export_metrics_button = QPushButton("Save Metrics CSV")
         self.export_metrics_button.clicked.connect(self.save_metrics)
+        self.export_anomaly_button = QPushButton("Save Anomaly CSV")
+        self.export_anomaly_button.clicked.connect(self.save_anomalies)
         self.export_status = QLabel("")
         export_layout.addRow(self.export_forecast_button)
         export_layout.addRow(self.export_metrics_button)
+        export_layout.addRow(self.export_anomaly_button)
         export_layout.addRow(self.export_status)
         self.tabs.addTab(export_tab, "Export")
         self.qt_window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
@@ -242,6 +281,7 @@ class MainWindow(WorkerMixin):
             self.feature_table = features
             self.data_status.setText("Loaded")
             self.import_button.setEnabled(True)
+            self.anomaly_df = None
             self.data_summary.setPlainText(_format_summary(summaries, summary))
             self._refresh_meters()
 
@@ -255,7 +295,11 @@ class MainWindow(WorkerMixin):
         if self.feature_table is None:
             return
         meters = sorted(self.feature_table["meter"].dropna().unique())
-        for combo in [self.train_meter_combo, self.forecast_meter_combo]:
+        for combo in [
+            self.train_meter_combo,
+            self.forecast_meter_combo,
+            self.anomaly_meter_combo,
+        ]:
             combo.clear()
             combo.addItem("All meters", "")
             for meter in meters:
@@ -325,6 +369,35 @@ class MainWindow(WorkerMixin):
 
         self.run_task(task, success, self._forecast_error)
 
+    def detect_anomalies(self):
+        if self.feature_table is None:
+            self.show_error("Import data before detecting anomalies.")
+            return
+        self.anomaly_button.setEnabled(False)
+
+        def task():
+            meter = self.anomaly_meter_combo.currentData()
+            meters = [meter] if meter else None
+            return run_anomaly_detection(
+                self.feature_table,
+                AnomalyRequest(
+                    meters=meters,
+                    contamination=float(self.anomaly_contamination_spin.value()),
+                ),
+            )
+
+        def success(result):
+            self.anomaly_df = result
+            self.anomaly_button.setEnabled(True)
+            self._refresh_anomaly_table()
+            self._plot_anomalies(result)
+
+        self.run_task(task, success, self._anomaly_error)
+
+    def _anomaly_error(self, message):
+        self.anomaly_button.setEnabled(True)
+        self.show_error(message)
+
     def _forecast_error(self, message):
         self.forecast_button.setEnabled(True)
         self.show_error(message)
@@ -341,11 +414,49 @@ class MainWindow(WorkerMixin):
             self.figure.autofmt_xdate()
         self.canvas.draw()
 
+    def _plot_anomalies(self, df):
+        axes = self.anomaly_figure.subplots()
+        axes.clear()
+        if df is not None and not df.empty:
+            plot_df = df.sort_values(["meter", "timestamp_local"])
+            for meter, group in plot_df.groupby("meter"):
+                axes.plot(
+                    group["timestamp_local"], group["kwh"], label=meter, alpha=0.65
+                )
+            anomalies = plot_df[plot_df["is_anomaly"]]
+            if not anomalies.empty:
+                colors = (
+                    anomalies["severity"].map({"High": "#d1242f"}).fillna("#fb8500")
+                )
+                axes.scatter(
+                    anomalies["timestamp_local"],
+                    anomalies["kwh"],
+                    c=colors,
+                    s=32,
+                    zorder=3,
+                )
+            axes.set_ylabel("kWh")
+            axes.set_xlabel("Time")
+            axes.legend(loc="upper left", fontsize="small", ncols=2)
+            self.anomaly_figure.autofmt_xdate()
+        self.anomaly_canvas.draw()
+
+    def _refresh_anomaly_table(self, *_args):
+        if self.anomaly_df is None:
+            return
+        data = self.anomaly_df
+        if self.anomaly_only_check.isChecked():
+            data = data[data["is_anomaly"]]
+        _fill_table(self.anomaly_table, data.head(500))
+
     def save_forecast(self):
         self._save_dataframe(self.forecast_df, "forecast.csv")
 
     def save_metrics(self):
         self._save_dataframe(self.metrics_df, "metrics.csv")
+
+    def save_anomalies(self):
+        self._save_dataframe(self.anomaly_df, "anomalies.csv")
 
     def _save_dataframe(self, df, default_name: str):
         from .qt_compat import QFileDialog
