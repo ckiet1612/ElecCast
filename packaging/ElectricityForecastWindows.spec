@@ -16,7 +16,7 @@ a = Analysis(
     [str(ENTRYPOINT)],
     pathex=[str(ROOT)],
     binaries=[],
-    datas=[(str(ROOT / "data" / "defaults"), "data/defaults")],
+    datas=[],
     hiddenimports=[
         "matplotlib.backends.backend_tkagg",
         "sklearn.utils._cython_blas",

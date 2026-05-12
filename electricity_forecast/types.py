@@ -28,12 +28,7 @@ class RawReading:
 
 @dataclass(frozen=True)
 class DataPaths:
-    kwh_csv: Path
-    guests_csv: Path | None = None
-    energy_log_csv: Path | None = None
-    pf_csv: Path | None = None
-    current_csv: Path | None = None
-    telemetry_csv: Path | None = None
+    telemetry_csv: Path
 
 
 @dataclass(frozen=True)
@@ -63,7 +58,7 @@ class AnomalyRequest:
     meters: list[str] | None = None
     contamination: float = 0.05
     max_rows: int | None = None
-    source_policy: str = "prefer_telemetry"
+    source_policy: str = "data_2026"
     only_anomalies: bool = False
 
 

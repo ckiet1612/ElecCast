@@ -7,7 +7,6 @@ from .anomaly import detect_anomalies as run_anomaly_detection
 from .data import summarize_paths
 from .features import build_feature_table, feature_summary
 from .models import forecast_dataframe, train_models
-from .paths import default_guests_csv
 from .types import AnomalyRequest, DataPaths, ForecastRequest
 from .weather import (
     default_weather_month,
@@ -92,12 +91,7 @@ class MainWindow(WorkerMixin):
         path_grid = QGridLayout()
         defaults = _default_paths()
         labels = [
-            ("kwh_csv", "data_kwh.csv"),
-            ("guests_csv", "sunworld_honthom_hourly_jan2026.csv (khách mặc định)"),
-            ("energy_log_csv", "energy_log.csv (optional)"),
-            ("pf_csv", "data_pf.csv (optional, slower)"),
-            ("current_csv", "data_current.csv (optional, slower)"),
-            ("telemetry_csv", "data_2026.csv (optional, very slow)"),
+            ("telemetry_csv", "data_2026.csv"),
         ]
         for row, (key, label) in enumerate(labels):
             edit = QLineEdit(defaults.get(key, ""))
@@ -254,17 +248,10 @@ class MainWindow(WorkerMixin):
             text = self.path_inputs[key].text().strip()
             return Path(text) if text else None
 
-        kwh = optional("kwh_csv")
-        if not kwh:
-            raise ValueError("data_kwh.csv is required.")
-        return DataPaths(
-            kwh_csv=kwh,
-            guests_csv=optional("guests_csv"),
-            energy_log_csv=optional("energy_log_csv"),
-            pf_csv=optional("pf_csv"),
-            current_csv=optional("current_csv"),
-            telemetry_csv=optional("telemetry_csv"),
-        )
+        telemetry = optional("telemetry_csv")
+        if not telemetry:
+            raise ValueError("data_2026.csv is required.")
+        return DataPaths(telemetry_csv=telemetry)
 
     def import_data(self):
         self.import_button.setEnabled(False)
@@ -488,13 +475,10 @@ def run_app(argv: list[str]) -> int:
 
 def _default_paths() -> dict[str, str]:
     downloads = Path.home() / "Downloads"
-    kwh_path = downloads / "data_kwh.csv"
-    guests_path = default_guests_csv()
+    telemetry_path = downloads / "data_2026.csv"
     paths = {}
-    if kwh_path.exists():
-        paths["kwh_csv"] = str(kwh_path)
-    if guests_path.exists():
-        paths["guests_csv"] = str(guests_path)
+    if telemetry_path.exists():
+        paths["telemetry_csv"] = str(telemetry_path)
     return paths
 
 

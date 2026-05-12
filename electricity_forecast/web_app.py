@@ -13,7 +13,6 @@ from .anomaly import detect_anomalies as run_anomaly_detection
 from .data import summarize_paths
 from .features import build_feature_table, feature_summary
 from .models import forecast_dataframe, train_models
-from .paths import default_guests_csv
 from .types import AnomalyRequest, DataPaths, ForecastRequest
 from .weather import (
     default_weather_month,
@@ -230,7 +229,7 @@ def _render(state: WebState) -> str:
   {_message(state)}
   <section>
     <h2>Data</h2>
-    <p class="muted">Quick import uses only data_kwh.csv. Add optional CSV files only when you need P/PF/current features; data_2026.csv is large and will make import much slower.</p>
+    <p class="muted">Import uses only data_2026.csv. The app derives hourly kWh, P, PF, and current from this file.</p>
     <form method="post" action="/import">
       <div class="grid">{_path_inputs(state.paths)}</div>
       <p><button type="submit">Import / Build Features</button></p>
@@ -282,12 +281,7 @@ def _render(state: WebState) -> str:
 
 def _path_inputs(paths: dict[str, str]) -> str:
     labels = {
-        "kwh_csv": "data_kwh.csv",
-        "guests_csv": "sunworld_honthom_hourly_jan2026.csv (khách mặc định)",
-        "energy_log_csv": "energy_log.csv (optional)",
-        "pf_csv": "data_pf.csv (optional, slower)",
-        "current_csv": "data_current.csv (optional, slower)",
-        "telemetry_csv": "data_2026.csv (optional, very slow)",
+        "telemetry_csv": "data_2026.csv",
     }
     return "".join(
         f'<div><label>{label}</label><input name="{key}" value="{html.escape(paths.get(key, ""))}"></div>'
@@ -507,42 +501,21 @@ def _first(form: dict[str, list[str]], key: str) -> str:
 
 
 def _path_keys() -> list[str]:
-    return [
-        "kwh_csv",
-        "guests_csv",
-        "energy_log_csv",
-        "pf_csv",
-        "current_csv",
-        "telemetry_csv",
-    ]
+    return ["telemetry_csv"]
 
 
 def _data_paths(paths: dict[str, str]) -> DataPaths:
-    if not paths.get("kwh_csv"):
-        raise ValueError("data_kwh.csv is required.")
-    return DataPaths(
-        kwh_csv=Path(paths["kwh_csv"]),
-        guests_csv=_optional(paths.get("guests_csv", "")),
-        energy_log_csv=_optional(paths.get("energy_log_csv", "")),
-        pf_csv=_optional(paths.get("pf_csv", "")),
-        current_csv=_optional(paths.get("current_csv", "")),
-        telemetry_csv=_optional(paths.get("telemetry_csv", "")),
-    )
-
-
-def _optional(value: str) -> Path | None:
-    return Path(value) if value else None
+    if not paths.get("telemetry_csv"):
+        raise ValueError("data_2026.csv is required.")
+    return DataPaths(telemetry_csv=Path(paths["telemetry_csv"]))
 
 
 def _default_paths() -> dict[str, str]:
     downloads = Path.home() / "Downloads"
-    kwh_path = downloads / "data_kwh.csv"
-    guests_path = default_guests_csv()
+    telemetry_path = downloads / "data_2026.csv"
     paths = {}
-    if kwh_path.exists():
-        paths["kwh_csv"] = str(kwh_path)
-    if guests_path.exists():
-        paths["guests_csv"] = str(guests_path)
+    if telemetry_path.exists():
+        paths["telemetry_csv"] = str(telemetry_path)
     return paths
 
 

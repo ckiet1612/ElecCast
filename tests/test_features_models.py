@@ -66,41 +66,29 @@ def test_train_and_forecast_generates_requested_rows():
     assert forecast["guest_count"].notna().all()
 
 
-def test_build_feature_table_uses_guest_csv(tmp_path):
-    kwh_path = tmp_path / "data_kwh.csv"
-    guest_path = tmp_path / "guests.csv"
-    kwh_path.write_text(
-        "name,time,hour,value\n"
-        "System1:PMS_FB2_MSB01_KWH.value.PVLAST,2026-01-01,7,125.5\n",
-        encoding="utf-8",
-    )
-    guest_path.write_text(
-        "datetime,day,hour,visitors\n2026-01-01 07:00,Thu,7,331\n",
-        encoding="utf-8",
-    )
-    df = build_feature_table_from_files(kwh_path, guests_csv=guest_path)
-    assert df.iloc[0]["guest_count"] == 331
-
-
-def test_build_feature_table_prefers_telemetry_kwh_for_detection(tmp_path):
-    kwh_path = tmp_path / "data_kwh.csv"
+def test_build_feature_table_uses_only_data2026(tmp_path):
     telemetry_path = tmp_path / "data_2026.csv"
-    kwh_path.write_text(
-        "name,time,hour,value\n"
-        "System1:PMS_FB2_MSB01_KWH.value.PVLAST,2026-01-01,7,125.5\n"
-        "System1:PMS_FB2_MSB01_KWH.value.PVLAST,2026-01-01,8,130.5\n",
-        encoding="utf-8",
-    )
     telemetry_path.write_text(
         "time,name,original_value_float\n"
         "2026-01-01 00:00:00+00,System1:PMS_FB2_MSB01_KWH.value.PVLAST,100\n"
-        "2026-01-01 01:00:00+00,System1:PMS_FB2_MSB01_KWH.value.PVLAST,112\n",
+        "2026-01-01 00:00:00+00,System1:PMS_FB2_MSB01_P.value.PVLAST,50\n"
+        "2026-01-01 00:00:00+00,System1:PMS_FB2_MSB01_PF.value.PVLAST,0.95\n"
+        "2026-01-01 00:00:00+00,System1:PMS_FB2_MSB01_IAVG.value.PVLAST,20\n"
+        "2026-01-01 01:00:00+00,System1:PMS_FB2_MSB01_KWH.value.PVLAST,112\n"
+        "2026-01-01 01:00:00+00,System1:PMS_FB2_MSB01_P.value.PVLAST,55\n"
+        "2026-01-01 01:00:00+00,System1:PMS_FB2_MSB01_PF.value.PVLAST,0.96\n"
+        "2026-01-01 01:00:00+00,System1:PMS_FB2_MSB01_IAVG.value.PVLAST,22\n",
         encoding="utf-8",
     )
-    df = build_feature_table_from_files(kwh_path, telemetry_csv=telemetry_path)
+    df = build_feature_table_from_files(telemetry_path)
     rows = df.sort_values("timestamp_local").reset_index(drop=True)
-    assert rows.iloc[0]["kwh_detection"] == 125.5
-    assert rows.iloc[0]["kwh_source"] == "data_kwh"
+    assert pd.isna(rows.iloc[0]["kwh"])
+    assert rows.iloc[0]["kwh_source"] == "missing"
+    assert rows.iloc[0]["p"] == 50
+    assert rows.iloc[0]["pf"] == 0.95
+    assert rows.iloc[0]["iavg"] == 20
+    assert rows.iloc[0]["guest_count"] > 0
+    assert rows.iloc[1]["kwh"] == 12
     assert rows.iloc[1]["kwh_detection"] == 12
     assert rows.iloc[1]["kwh_source"] == "data_2026"
 
@@ -108,7 +96,7 @@ def test_build_feature_table_prefers_telemetry_kwh_for_detection(tmp_path):
 def test_detect_anomalies_returns_scores_and_reasons():
     features = synthetic_features(meters=("FB2_MSB01",), periods=80)
     features["kwh_detection"] = features["kwh"]
-    features["kwh_source"] = "data_kwh"
+    features["kwh_source"] = "data_2026"
     features["kwh_telemetry_issue"] = ""
     target_index = features.index[-1]
     features.loc[target_index, "kwh_detection"] = features["kwh"].median() * 12
@@ -127,3 +115,27 @@ def test_detect_anomalies_returns_scores_and_reasons():
     anomalies = result[result["is_anomaly"]]
     assert not anomalies.empty
     assert anomalies["reason"].str.contains("KWH telemetry delta outlier").any()
+
+
+def test_detect_anomalies_keeps_invalid_data2026_delta(tmp_path):
+    telemetry_path = tmp_path / "data_2026.csv"
+    telemetry_path.write_text(
+        "time,name,original_value_float\n"
+        "2026-01-01 00:00:00+00,System1:PMS_FB2_MSB01_KWH.value.PVLAST,100\n"
+        "2026-01-01 00:00:00+00,System1:PMS_FB2_MSB01_P.value.PVLAST,40\n"
+        "2026-01-01 00:00:00+00,System1:PMS_FB2_MSB01_PF.value.PVLAST,0.94\n"
+        "2026-01-01 00:00:00+00,System1:PMS_FB2_MSB01_IAVG.value.PVLAST,10\n"
+        "2026-01-01 01:00:00+00,System1:PMS_FB2_MSB01_KWH.value.PVLAST,90\n"
+        "2026-01-01 01:00:00+00,System1:PMS_FB2_MSB01_P.value.PVLAST,40\n"
+        "2026-01-01 01:00:00+00,System1:PMS_FB2_MSB01_PF.value.PVLAST,0.94\n"
+        "2026-01-01 01:00:00+00,System1:PMS_FB2_MSB01_IAVG.value.PVLAST,10\n",
+        encoding="utf-8",
+    )
+    features = build_feature_table_from_files(telemetry_path)
+    result = detect_anomalies(
+        features,
+        AnomalyRequest(meters=["FB2_MSB01"], contamination=0.05),
+    )
+    assert not result.empty
+    assert result["is_anomaly"].any()
+    assert result["reason"].str.contains("KWH telemetry reset/negative delta").any()

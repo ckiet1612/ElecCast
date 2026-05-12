@@ -18,12 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Train and forecast hourly electricity consumption."
     )
-    parser.add_argument("--kwh", required=True, help="Path to data_kwh.csv")
-    parser.add_argument("--guests", help="Path to hourly visitors CSV")
-    parser.add_argument("--energy-log", help="Path to energy_log.csv")
-    parser.add_argument("--pf", help="Path to data_pf.csv")
-    parser.add_argument("--current", help="Path to data_current.csv")
-    parser.add_argument("--telemetry", help="Path to data_2026.csv")
+    parser.add_argument("--telemetry", required=True, help="Path to data_2026.csv")
     parser.add_argument(
         "--meter",
         action="append",
@@ -86,11 +81,6 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     features = build_feature_table_from_files(
-        kwh_csv=args.kwh,
-        guests_csv=args.guests,
-        energy_log_csv=args.energy_log,
-        pf_csv=args.pf,
-        current_csv=args.current,
         telemetry_csv=args.telemetry,
     )
     print("Feature summary:", feature_summary(features))

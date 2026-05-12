@@ -120,14 +120,22 @@ def _prepare_anomaly_frame(feature_table, request: AnomalyRequest):
         data["kwh_telemetry_issue"] = ""
     if "kwh_detection" not in data:
         data["kwh_detection"] = data["kwh"]
-    if request.source_policy == "data_kwh":
-        data["kwh_detection"] = data["kwh"]
-        data["kwh_source"] = "data_kwh"
-    elif request.source_policy == "telemetry_only":
+    if (
+        request.source_policy in {"data_2026", "telemetry_only"}
+        and data["kwh_telemetry"].notna().any()
+    ):
         data["kwh_detection"] = data["kwh_telemetry"]
         data["kwh_source"] = "data_2026"
     elif "kwh_source" not in data:
-        data["kwh_source"] = "data_kwh"
+        data["kwh_source"] = "data_2026"
+
+    if "kwh_telemetry_raw_delta" not in data:
+        data["kwh_telemetry_raw_delta"] = pd.NA
+    issue_mask = data["kwh_telemetry_issue"].fillna("").ne("")
+    raw_delta = pd.to_numeric(data["kwh_telemetry_raw_delta"], errors="coerce")
+    missing_issue_kwh = issue_mask & data["kwh_detection"].isna()
+    data.loc[missing_issue_kwh & raw_delta.notna(), "kwh_detection"] = raw_delta
+    data.loc[missing_issue_kwh & data["kwh_detection"].isna(), "kwh_detection"] = 0.0
 
     for column in ANOMALY_FEATURE_COLUMNS:
         if column not in data:

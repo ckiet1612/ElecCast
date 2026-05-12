@@ -39,58 +39,6 @@ def parse_names_series(series):
     )
 
 
-def read_kwh_target(kwh_csv: str | Path):
-    import pandas as pd
-
-    path = Path(kwh_csv)
-    df = pd.read_csv(path)
-    required = {"name", "time", "hour", "value"}
-    missing = required.difference(df.columns)
-    if missing:
-        raise ValueError(f"{path} missing required columns: {sorted(missing)}")
-
-    df = df[["name", "time", "hour", "value"]].copy()
-    df["meter"], df["area"], df["metric"] = parse_names_series(df["name"])
-    df = df[df["metric"].eq("KWH")].copy()
-    df["timestamp_local"] = pd.to_datetime(
-        df["time"], errors="coerce"
-    ) + pd.to_timedelta(
-        pd.to_numeric(df["hour"], errors="coerce").fillna(0).astype(int), unit="h"
-    )
-    df["timestamp_local"] = df["timestamp_local"].dt.tz_localize(
-        LOCAL_TZ, nonexistent="shift_forward", ambiguous="NaT"
-    )
-    df["kwh"] = pd.to_numeric(df["value"], errors="coerce")
-    df = df.dropna(subset=["timestamp_local", "meter", "kwh"])
-    df = (
-        df.groupby(["timestamp_local", "meter", "area"], as_index=False)["kwh"]
-        .mean()
-        .sort_values(["meter", "timestamp_local"])
-    )
-    return df
-
-
-def read_guest_counts(guests_csv: str | Path):
-    import pandas as pd
-
-    path = Path(guests_csv)
-    df = pd.read_csv(path)
-    required = {"datetime", "visitors"}
-    missing = required.difference(df.columns)
-    if missing:
-        raise ValueError(f"{path} missing required columns: {sorted(missing)}")
-
-    guests = df[["datetime", "visitors"]].copy()
-    guests["timestamp_local"] = pd.to_datetime(guests["datetime"], errors="coerce")
-    guests["timestamp_local"] = guests["timestamp_local"].dt.tz_localize(
-        LOCAL_TZ, nonexistent="shift_forward", ambiguous="NaT"
-    )
-    guests["guest_count"] = pd.to_numeric(guests["visitors"], errors="coerce")
-    guests = guests.dropna(subset=["timestamp_local", "guest_count"])
-    guests["timestamp_local"] = guests["timestamp_local"].dt.floor("h")
-    return guests.groupby("timestamp_local", as_index=False)["guest_count"].mean()
-
-
 def read_raw_metric_hourly(
     csv_path: str | Path,
     metrics: Iterable[str],
@@ -143,20 +91,74 @@ def read_cumulative_kwh_hourly(
     import pandas as pd
 
     raw = read_raw_metric_hourly(csv_path, ["KWH"], chunksize=chunksize, aggfunc="max")
+    if raw.empty:
+        return pd.DataFrame(columns=_TELEMETRY_KWH_COLUMNS)
+
+    raw = raw.rename(columns={"value": "kwh_cumulative"})
+    raw = raw[["timestamp_local", "meter", "area", "kwh_cumulative"]].copy()
+    return _cumulative_kwh_to_hourly(raw)
+
+
+def read_telemetry_hourly_features(
+    csv_path: str | Path,
+    chunksize: int = 250_000,
+):
+    """Read data_2026.csv once and build hourly P/PF/current/KWH features."""
+    import pandas as pd
+
+    raw = _read_mixed_metric_hourly(csv_path, ["P", "PF", "IAVG", "KWH"], chunksize)
     columns = [
         "timestamp_local",
         "meter",
         "area",
-        "kwh_cumulative",
-        "kwh_telemetry_raw_delta",
-        "kwh_telemetry",
-        "kwh_telemetry_issue",
+        "p",
+        "pf",
+        "iavg",
+        *_TELEMETRY_KWH_COLUMNS[3:],
     ]
     if raw.empty:
         return pd.DataFrame(columns=columns)
 
-    raw = raw.rename(columns={"value": "kwh_cumulative"})
-    raw = raw[["timestamp_local", "meter", "area", "kwh_cumulative"]].copy()
+    pivot = pivot_metric_features(raw)
+    if "kwh" in pivot:
+        pivot = pivot.rename(columns={"kwh": "kwh_cumulative"})
+    if "kwh_cumulative" in pivot:
+        telemetry_kwh = _cumulative_kwh_to_hourly(
+            pivot[["timestamp_local", "meter", "area", "kwh_cumulative"]].dropna(
+                subset=["kwh_cumulative"]
+            )
+        )
+        pivot = pivot.drop(columns=["kwh_cumulative"])
+        pivot = pivot.merge(
+            telemetry_kwh,
+            on=["timestamp_local", "meter", "area"],
+            how="outer",
+        )
+    for column in columns:
+        if column not in pivot:
+            pivot[column] = pd.NA
+    return (
+        pivot[columns].sort_values(["meter", "timestamp_local"]).reset_index(drop=True)
+    )
+
+
+_TELEMETRY_KWH_COLUMNS = [
+    "timestamp_local",
+    "meter",
+    "area",
+    "kwh_cumulative",
+    "kwh_telemetry_raw_delta",
+    "kwh_telemetry",
+    "kwh_telemetry_issue",
+]
+
+
+def _cumulative_kwh_to_hourly(raw):
+    import pandas as pd
+
+    if raw.empty:
+        return pd.DataFrame(columns=_TELEMETRY_KWH_COLUMNS)
+
     pieces = []
     for _, group in raw.sort_values(["meter", "timestamp_local"]).groupby("meter"):
         meter_data = group.copy()
@@ -174,7 +176,57 @@ def read_cumulative_kwh_hourly(
         meter_data["kwh_telemetry_issue"] = issue
         pieces.append(meter_data)
 
-    return pd.concat(pieces, ignore_index=True)[columns]
+    return pd.concat(pieces, ignore_index=True)[_TELEMETRY_KWH_COLUMNS]
+
+
+def _read_mixed_metric_hourly(
+    csv_path: str | Path,
+    metrics: Iterable[str],
+    chunksize: int,
+):
+    import pandas as pd
+
+    path = Path(csv_path)
+    wanted = {metric.upper() for metric in metrics}
+    chunks = []
+    usecols = ["time", "name", RAW_VALUE_COLUMN]
+    for chunk in pd.read_csv(path, usecols=usecols, chunksize=chunksize):
+        chunk["meter"], chunk["area"], chunk["metric"] = parse_names_series(
+            chunk["name"]
+        )
+        chunk = chunk[chunk["metric"].isin(wanted)].copy()
+        if chunk.empty:
+            continue
+        chunk["timestamp_local"] = (
+            pd.to_datetime(chunk["time"], utc=True, errors="coerce")
+            .dt.tz_convert(LOCAL_TZ)
+            .dt.floor("h")
+        )
+        chunk["value"] = pd.to_numeric(chunk[RAW_VALUE_COLUMN], errors="coerce")
+        chunk = chunk.dropna(subset=["timestamp_local", "meter", "value"])
+        if chunk.empty:
+            continue
+        kwh = chunk[chunk["metric"].eq("KWH")]
+        other = chunk[~chunk["metric"].eq("KWH")]
+        if not kwh.empty:
+            chunks.append(_aggregate_metric_chunk(kwh, "max"))
+        if not other.empty:
+            chunks.append(_aggregate_metric_chunk(other, "mean"))
+
+    if not chunks:
+        return pd.DataFrame(
+            columns=["timestamp_local", "meter", "area", "metric", "value"]
+        )
+
+    data = pd.concat(chunks, ignore_index=True)
+    kwh_data = data[data["metric"].eq("KWH")]
+    other_data = data[~data["metric"].eq("KWH")]
+    final_chunks = []
+    if not kwh_data.empty:
+        final_chunks.append(_aggregate_metric_chunk(kwh_data, "max"))
+    if not other_data.empty:
+        final_chunks.append(_aggregate_metric_chunk(other_data, "mean"))
+    return pd.concat(final_chunks, ignore_index=True)
 
 
 def _aggregate_metric_chunk(chunk, aggfunc: str):
@@ -264,18 +316,9 @@ def summarize_csv(
 
 def summarize_paths(paths: DataPaths) -> list[dict[str, object]]:
     summaries = []
-    for label, value in [
-        ("data_kwh", paths.kwh_csv),
-        ("guests", paths.guests_csv),
-        ("energy_log", paths.energy_log_csv),
-        ("data_pf", paths.pf_csv),
-        ("data_current", paths.current_csv),
-        ("data_2026", paths.telemetry_csv),
-    ]:
-        if value:
-            summary = summarize_csv(value)
-            summary["label"] = label
-            summaries.append(summary)
+    summary = summarize_csv(paths.telemetry_csv)
+    summary["label"] = "data_2026"
+    summaries.append(summary)
     return summaries
 
 

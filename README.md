@@ -4,15 +4,11 @@ Desktop Python app for forecasting future hourly electricity consumption (`kWh`)
 
 ## Data Inputs
 
-The app expects these CSV files:
+The app expects one CSV file:
 
-- `data_kwh.csv`: hourly target values with `name,time,hour,value`
-- `energy_log.csv`: cumulative KWH readings with `time,name,original_value_float`
-- `data_pf.csv`: power factor readings
-- `data_current.csv`: current readings
-- `data_2026.csv`: wide electrical telemetry source including `P`, `PF`, current, and cumulative `KWH`
+- `data_2026.csv`: SCADA telemetry with `time,name,original_value_float`, including `P`, `PF`, `IAVG`, and cumulative `KWH`
 
-Raw timestamped CSV files are treated as UTC and converted to `Asia/Ho_Chi_Minh`. `data_kwh.csv` is treated as already local because it has separate `time` and `hour` columns.
+Raw timestamps are treated as UTC and converted to `Asia/Ho_Chi_Minh`. Hourly kWh is derived from cumulative `KWH` deltas in `data_2026.csv`.
 
 ## Setup
 
@@ -48,15 +44,12 @@ The Forecast tab uses Open-Meteo to fetch the average monthly temperature from a
 
 ## Anomaly Detection
 
-The Anomaly tab uses Isolation Forest to flag unusual hourly readings. It prioritizes hourly kWh deltas calculated from cumulative `KWH` in `data_2026.csv`, then falls back to `data_kwh.csv` when telemetry deltas are missing or invalid. Results include anomaly score, severity, and a short reason such as low PF, high current, kWh spike, or telemetry reset/outlier.
+The Anomaly tab uses Isolation Forest to flag unusual hourly readings from `data_2026.csv`. Results include anomaly score, severity, and a short reason such as low PF, high current, kWh spike, or telemetry reset/outlier.
 
 ## CLI Smoke Workflow
 
 ```bash
 python -m electricity_forecast.cli \
-  --kwh /Users/macbook/Downloads/data_kwh.csv \
-  --pf /Users/macbook/Downloads/data_pf.csv \
-  --current /Users/macbook/Downloads/data_current.csv \
   --telemetry /Users/macbook/Downloads/data_2026.csv \
   --weather-location "Hòn Thơm, Phú Quốc" \
   --weather-month 2026-01 \
@@ -68,9 +61,6 @@ CLI anomaly run:
 
 ```bash
 python -m electricity_forecast.cli \
-  --kwh /Users/macbook/Downloads/data_kwh.csv \
-  --pf /Users/macbook/Downloads/data_pf.csv \
-  --current /Users/macbook/Downloads/data_current.csv \
   --telemetry /Users/macbook/Downloads/data_2026.csv \
   --detect-anomalies \
   --anomaly-contamination 0.05 \

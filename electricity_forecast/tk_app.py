@@ -11,7 +11,6 @@ from .anomaly import detect_anomalies as run_anomaly_detection
 from .data import summarize_paths
 from .features import build_feature_table, feature_summary
 from .models import forecast_dataframe, train_models
-from .paths import default_guests_csv
 from .types import AnomalyRequest, DataPaths, ForecastRequest
 from .weather import (
     default_weather_month,
@@ -70,12 +69,7 @@ class ElectricityForecastTk:
         notebook.add(frame, text="Data")
         defaults = _default_paths()
         rows = [
-            ("kwh_csv", "data_kwh.csv"),
-            ("guests_csv", "sunworld_honthom_hourly_jan2026.csv (khách mặc định)"),
-            ("energy_log_csv", "energy_log.csv (optional)"),
-            ("pf_csv", "data_pf.csv (optional, slower)"),
-            ("current_csv", "data_current.csv (optional, slower)"),
-            ("telemetry_csv", "data_2026.csv (optional, very slow)"),
+            ("telemetry_csv", "data_2026.csv"),
         ]
         for row, (key, label) in enumerate(rows):
             ttk.Label(frame, text=label).grid(
@@ -102,7 +96,7 @@ class ElectricityForecastTk:
         self.data_status.pack(side="left", padx=12)
         ttk.Label(
             frame,
-            text="Quick import uses only data_kwh.csv. Add optional CSV files only when you need P/PF/current features.",
+            text="Import uses only data_2026.csv. The app derives hourly kWh, P, PF, and current from this file.",
         ).grid(row=len(rows) + 1, column=0, columnspan=3, sticky="w", pady=(0, 8))
         self.data_summary = tk.Text(frame, height=24, wrap="word")
         self.data_summary.grid(row=len(rows) + 2, column=0, columnspan=3, sticky="nsew")
@@ -467,17 +461,10 @@ class ElectricityForecastTk:
             self.weather_month_combo.configure(values=month_options(max_time))
 
     def _paths(self) -> DataPaths:
-        kwh = self.paths["kwh_csv"].get().strip()
-        if not kwh:
-            raise ValueError("data_kwh.csv is required.")
-        return DataPaths(
-            kwh_csv=Path(kwh),
-            guests_csv=_optional_path(self.paths["guests_csv"].get()),
-            energy_log_csv=_optional_path(self.paths["energy_log_csv"].get()),
-            pf_csv=_optional_path(self.paths["pf_csv"].get()),
-            current_csv=_optional_path(self.paths["current_csv"].get()),
-            telemetry_csv=_optional_path(self.paths["telemetry_csv"].get()),
-        )
+        telemetry = self.paths["telemetry_csv"].get().strip()
+        if not telemetry:
+            raise ValueError("data_2026.csv is required.")
+        return DataPaths(telemetry_csv=Path(telemetry))
 
     def _pick_csv(self, target: tk.StringVar) -> None:
         path = filedialog.askopenfilename(
@@ -512,19 +499,11 @@ class ElectricityForecastTk:
 
 def _default_paths() -> dict[str, str]:
     downloads = Path.home() / "Downloads"
-    kwh_path = downloads / "data_kwh.csv"
-    guests_path = default_guests_csv()
+    telemetry_path = downloads / "data_2026.csv"
     paths = {}
-    if kwh_path.exists():
-        paths["kwh_csv"] = str(kwh_path)
-    if guests_path.exists():
-        paths["guests_csv"] = str(guests_path)
+    if telemetry_path.exists():
+        paths["telemetry_csv"] = str(telemetry_path)
     return paths
-
-
-def _optional_path(value: str) -> Path | None:
-    text = value.strip()
-    return Path(text) if text else None
 
 
 def _horizon_hours(label: str) -> int:
