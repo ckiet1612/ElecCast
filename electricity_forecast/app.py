@@ -7,6 +7,8 @@ from pathlib import Path
 
 def main() -> int:
     ui = os.environ.get("ELECTRICITY_FORECAST_UI", _default_ui()).lower()
+    if ui == "native":
+        ui = "tk"
     if "--qt" in sys.argv:
         ui = "qt"
     if "--tk" in sys.argv:
@@ -45,7 +47,8 @@ def _missing_dependency(exc: ModuleNotFoundError) -> int:
 
 
 def _default_ui() -> str:
-    if Path(sys.executable).parent.parent.name == ".venv-native":
+    executable_root = Path(sys.executable).parent.parent.name
+    if executable_root in {".venv-native", ".venv"}:
         return "tk"
     return "web"
 
