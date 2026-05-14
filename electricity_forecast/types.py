@@ -29,6 +29,7 @@ class RawReading:
 @dataclass(frozen=True)
 class DataPaths:
     telemetry_csv: Path
+    guests_csv: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -70,13 +71,23 @@ class AnomalyResult:
     anomaly_score: float
     severity: str
     is_anomaly: bool
+    anomaly_type: str
     reason: str
     kwh: float | None
-    pf: float | None
-    iavg: float | None
     p: float | None
+    q: float | None
+    s: float | None
+    pf: float | None
+    ia: float | None
+    ib: float | None
+    ic: float | None
+    iavg: float | None
+    vavg: float | None
+    voltage_imbalance_pct: float | None
+    current_imbalance_pct: float | None
+    thd_current: float | None
+    thd_voltage: float | None
     temperature_c: float | None
-    guest_count: float | None
     kwh_source: str
 
 

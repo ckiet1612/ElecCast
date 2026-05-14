@@ -9,7 +9,10 @@ from .types import ForecastRequest, LOCAL_TIMEZONE, MeterModelMetrics, TrainedMe
 
 
 def train_models(
-    feature_table, meters: list[str] | None = None, include_arima: bool = True
+    feature_table,
+    meters: list[str] | None = None,
+    include_arima: bool = False,
+    model_policy: str = "linear",
 ):
     import numpy as np
     import pandas as pd
@@ -85,16 +88,26 @@ def train_models(
                 rows_test=len(test_df),
             )
             metric_rows.append(metrics)
-            scored.append((rmse, metrics, name, kind, estimator))
+            scored.append((rmse, metrics, name, kind, estimator, pred))
 
-        scored.sort(key=lambda item: item[0])
-        _, selected_metrics, selected_name, selected_kind, selected_estimator = scored[
-            0
-        ]
+        selection_pool = scored
+        if model_policy == "linear":
+            linear_pool = [item for item in scored if item[2] == "LinearRegression"]
+            if linear_pool:
+                selection_pool = linear_pool
+        selection_pool.sort(key=lambda item: item[0])
+        (
+            _,
+            selected_metrics,
+            selected_name,
+            selected_kind,
+            selected_estimator,
+            selected_backtest_pred,
+        ) = selection_pool[0]
 
         if selected_kind == "baseline":
             final_estimator = None
-            residual_pred = _baseline_predict(X_test, y_train.median())
+            residual_pred = selected_backtest_pred
         elif selected_kind == "arima":
             final_estimator, residual_pred = _fit_arima(
                 meter_df["kwh"].astype(float), len(test_df)
@@ -103,12 +116,12 @@ def train_models(
                 final_estimator = None
                 selected_name = "SeasonalNaive"
                 selected_kind = "baseline"
-                residual_pred = _baseline_predict(X_test, y_train.median())
+                residual_pred = selected_backtest_pred
         else:
             final_estimator = selected_estimator.fit(
                 meter_df[feature_columns], meter_df["kwh"].astype(float)
             )
-            residual_pred = final_estimator.predict(X_test)
+            residual_pred = selected_backtest_pred
 
         residual_std = (
             float(np.std(np.asarray(y_test) - np.asarray(residual_pred)))
@@ -116,7 +129,16 @@ def train_models(
             else 0.0
         )
         area = str(meter_df["area"].iloc[0])
-        history_cols = ["timestamp_local", "meter", "area", "kwh", "p", "pf", "iavg"]
+        history_cols = [
+            "timestamp_local",
+            "meter",
+            "area",
+            "kwh",
+            "p",
+            "pf",
+            "iavg",
+            "vavg",
+        ]
         history_cols = [col for col in history_cols if col in meter_df.columns]
         trained[meter] = TrainedMeterModel(
             meter=meter,
@@ -129,7 +151,12 @@ def train_models(
             metrics=selected_metrics,
             residual_std=residual_std,
             history=meter_df[history_cols].copy(),
-            metadata={"last_timestamp": str(meter_df["timestamp_local"].max())},
+            metadata={
+                "last_timestamp": str(meter_df["timestamp_local"].max()),
+                "backtest_rows": _backtest_rows(
+                    test_df, selected_backtest_pred, selected_name
+                ),
+            },
         )
 
     metrics_df = pd.DataFrame([metric.__dict__ for metric in metric_rows])
@@ -166,6 +193,28 @@ def metrics_to_frame(models: dict[str, TrainedMeterModel]):
     return pd.DataFrame([model.metrics.__dict__ for model in models.values()])
 
 
+def backtest_predictions_dataframe(models: dict[str, TrainedMeterModel]):
+    import pandas as pd
+
+    rows = []
+    for model in models.values():
+        rows.extend(model.metadata.get("backtest_rows", []))
+    columns = [
+        "timestamp_local",
+        "meter",
+        "area",
+        "actual_kwh",
+        "predicted_kwh",
+        "residual_kwh",
+        "model_name",
+    ]
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return pd.DataFrame(rows, columns=columns).sort_values(
+        ["area", "meter", "timestamp_local"]
+    )
+
+
 def save_models(models: dict[str, TrainedMeterModel], path: str | Path) -> None:
     import joblib
 
@@ -197,6 +246,25 @@ def _baseline_predict(X, fallback: float):
         np.isnan(values), float(fallback if fallback == fallback else 0.0), values
     )
     return np.clip(values, 0.0, None)
+
+
+def _backtest_rows(test_df, predictions, model_name: str) -> list[dict[str, object]]:
+    rows = []
+    for (_, row), pred in zip(test_df.iterrows(), predictions):
+        actual = float(row["kwh"])
+        predicted = max(float(pred), 0.0)
+        rows.append(
+            {
+                "timestamp_local": row["timestamp_local"],
+                "meter": row["meter"],
+                "area": row["area"],
+                "actual_kwh": actual,
+                "predicted_kwh": predicted,
+                "residual_kwh": actual - predicted,
+                "model_name": model_name,
+            }
+        )
+    return rows
 
 
 def _fit_arima(y, steps: int):
@@ -293,6 +361,7 @@ def _future_feature_row(
     p = _recent_median(history, "p", 0.0)
     pf = _recent_median(history, "pf", 0.95)
     iavg = _recent_median(history, "iavg", 0.0)
+    vavg = _recent_median(history, "vavg", 400.0)
     lag_1h = value_by_ts.get(pd.Timestamp(timestamp) - pd.Timedelta(hours=1), fallback)
     lag_24h = value_by_ts.get(pd.Timestamp(timestamp) - pd.Timedelta(hours=24), lag_1h)
     lag_168h = value_by_ts.get(
@@ -309,6 +378,7 @@ def _future_feature_row(
         "p": p,
         "pf": pf,
         "iavg": iavg,
+        "vavg": vavg,
         "temperature_c": _forecast_temperature(timestamp, request),
         "guest_count": _forecast_guest_count(model, timestamp, request),
         "lag_1h": lag_1h,

@@ -20,6 +20,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--telemetry", required=True, help="Path to data_2026.csv")
     parser.add_argument(
+        "--guests",
+        help="Optional customer/visitor CSV with datetime and guest_count/visitors.",
+    )
+    parser.add_argument(
         "--meter",
         action="append",
         help="Meter to train/forecast. Repeat for multiple meters.",
@@ -82,6 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     features = build_feature_table_from_files(
         telemetry_csv=args.telemetry,
+        guests_csv=args.guests,
     )
     print("Feature summary:", feature_summary(features))
     if args.detect_anomalies:

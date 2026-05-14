@@ -6,7 +6,8 @@ from typing import Callable
 from .anomaly import detect_anomalies as run_anomaly_detection
 from .data import summarize_paths
 from .features import build_feature_table, feature_summary
-from .models import forecast_dataframe, train_models
+from .models import backtest_predictions_dataframe, forecast_dataframe, train_models
+from .plots import draw_actual_vs_predicted
 from .types import AnomalyRequest, DataPaths, ForecastRequest
 from .weather import (
     default_weather_month,
@@ -76,6 +77,7 @@ class MainWindow(WorkerMixin):
         self.feature_table = None
         self.trained_models = {}
         self.metrics_df = None
+        self.backtest_df = None
         self.forecast_df = None
         self.anomaly_df = None
 
@@ -92,6 +94,7 @@ class MainWindow(WorkerMixin):
         defaults = _default_paths()
         labels = [
             ("telemetry_csv", "data_2026.csv"),
+            ("guests_csv", "Danh sách khách/khách hàng CSV"),
         ]
         for row, (key, label) in enumerate(labels):
             edit = QLineEdit(defaults.get(key, ""))
@@ -129,8 +132,10 @@ class MainWindow(WorkerMixin):
         train_controls.addWidget(self.train_button)
         train_controls.addStretch()
         training_layout.addLayout(train_controls)
+        self.backtest_figure, self.backtest_canvas = _make_canvas()
+        training_layout.addWidget(self.backtest_canvas, stretch=2)
         self.metrics_table = QTableWidget()
-        training_layout.addWidget(self.metrics_table)
+        training_layout.addWidget(self.metrics_table, stretch=1)
         self.tabs.addTab(training_tab, "Training")
 
         forecast_tab = QWidget()
@@ -215,11 +220,14 @@ class MainWindow(WorkerMixin):
         self.export_forecast_button.clicked.connect(self.save_forecast)
         self.export_metrics_button = QPushButton("Save Metrics CSV")
         self.export_metrics_button.clicked.connect(self.save_metrics)
+        self.export_backtest_button = QPushButton("Save Backtest CSV")
+        self.export_backtest_button.clicked.connect(self.save_backtest)
         self.export_anomaly_button = QPushButton("Save Anomaly CSV")
         self.export_anomaly_button.clicked.connect(self.save_anomalies)
         self.export_status = QLabel("")
         export_layout.addRow(self.export_forecast_button)
         export_layout.addRow(self.export_metrics_button)
+        export_layout.addRow(self.export_backtest_button)
         export_layout.addRow(self.export_anomaly_button)
         export_layout.addRow(self.export_status)
         self.tabs.addTab(export_tab, "Export")
@@ -251,7 +259,7 @@ class MainWindow(WorkerMixin):
         telemetry = optional("telemetry_csv")
         if not telemetry:
             raise ValueError("data_2026.csv is required.")
-        return DataPaths(telemetry_csv=telemetry)
+        return DataPaths(telemetry_csv=telemetry, guests_csv=optional("guests_csv"))
 
     def import_data(self):
         self.import_button.setEnabled(False)
@@ -310,8 +318,10 @@ class MainWindow(WorkerMixin):
 
         def success(result):
             self.trained_models, self.metrics_df = result
+            self.backtest_df = backtest_predictions_dataframe(self.trained_models)
             self.train_button.setEnabled(True)
             _fill_table(self.metrics_table, self.metrics_df)
+            self._plot_backtest(self.backtest_df)
 
         self.run_task(task, success, self._train_error)
 
@@ -401,6 +411,10 @@ class MainWindow(WorkerMixin):
             self.figure.autofmt_xdate()
         self.canvas.draw()
 
+    def _plot_backtest(self, df):
+        draw_actual_vs_predicted(self.backtest_figure, df)
+        self.backtest_canvas.draw()
+
     def _plot_anomalies(self, df):
         axes = self.anomaly_figure.subplots()
         axes.clear()
@@ -442,6 +456,9 @@ class MainWindow(WorkerMixin):
     def save_metrics(self):
         self._save_dataframe(self.metrics_df, "metrics.csv")
 
+    def save_backtest(self):
+        self._save_dataframe(self.backtest_df, "backtest_actual_vs_predicted.csv")
+
     def save_anomalies(self):
         self._save_dataframe(self.anomaly_df, "anomalies.csv")
 
@@ -476,9 +493,12 @@ def run_app(argv: list[str]) -> int:
 def _default_paths() -> dict[str, str]:
     downloads = Path.home() / "Downloads"
     telemetry_path = downloads / "data_2026.csv"
+    guests_path = downloads / "sunworld_honthom_hourly_jan2026.csv"
     paths = {}
     if telemetry_path.exists():
         paths["telemetry_csv"] = str(telemetry_path)
+    if guests_path.exists():
+        paths["guests_csv"] = str(guests_path)
     return paths
 
 

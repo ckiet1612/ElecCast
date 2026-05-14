@@ -5,6 +5,7 @@ from pathlib import Path
 from .data import (
     default_guest_count,
     default_temperature,
+    read_guest_counts,
     read_telemetry_hourly_features,
 )
 from .types import DataPaths
@@ -19,6 +20,7 @@ NUMERIC_FEATURE_COLUMNS = [
     "p",
     "pf",
     "iavg",
+    "vavg",
     "temperature_c",
     "guest_count",
     "lag_1h",
@@ -41,7 +43,22 @@ def build_feature_table(paths: DataPaths):
     features["kwh_source"] = "missing"
     features.loc[features["kwh_telemetry"].notna(), "kwh_source"] = "data_2026"
 
-    for col, default in [("p", 0.0), ("pf", 0.95), ("iavg", 0.0)]:
+    telemetry_defaults = [
+        ("p", 0.0),
+        ("q", 0.0),
+        ("s", 0.0),
+        ("pf", 0.95),
+        ("ia", 0.0),
+        ("ib", 0.0),
+        ("ic", 0.0),
+        ("iavg", 0.0),
+        ("voltage_imbalance_pct", 0.0),
+        ("current_imbalance_pct", 0.0),
+        ("vavg", 400.0),
+        ("thd_current", 0.0),
+        ("thd_voltage", 0.0),
+    ]
+    for col, default in telemetry_defaults:
         if col not in features:
             features[col] = default
         features[col] = pd.to_numeric(features[col], errors="coerce")
@@ -52,6 +69,9 @@ def build_feature_table(paths: DataPaths):
 
     features = add_time_features(features)
     features["temperature_c"] = features["timestamp_local"].map(default_temperature)
+    if paths.guests_csv:
+        guests = read_guest_counts(paths.guests_csv)
+        features = _merge_guest_counts(features, guests)
     simulated_guests = features.apply(
         lambda row: default_guest_count(row["timestamp_local"], row["area"]), axis=1
     )
@@ -63,9 +83,28 @@ def build_feature_table(paths: DataPaths):
     return features.sort_values(["meter", "timestamp_local"]).reset_index(drop=True)
 
 
-def build_feature_table_from_files(telemetry_csv: str | Path):
-    paths = DataPaths(telemetry_csv=Path(telemetry_csv))
+def build_feature_table_from_files(
+    telemetry_csv: str | Path,
+    guests_csv: str | Path | None = None,
+):
+    paths = DataPaths(
+        telemetry_csv=Path(telemetry_csv),
+        guests_csv=Path(guests_csv) if guests_csv else None,
+    )
     return build_feature_table(paths)
+
+
+def _merge_guest_counts(features, guests):
+    if guests.empty:
+        return features
+    merge_cols = ["timestamp_local"]
+    if "meter" in guests and "area" in guests:
+        merge_cols.extend(["meter", "area"])
+    elif "meter" in guests:
+        merge_cols.append("meter")
+    elif "area" in guests:
+        merge_cols.append("area")
+    return features.merge(guests, on=merge_cols, how="left")
 
 
 def add_time_features(df):
@@ -152,8 +191,18 @@ def _empty_feature_table():
             "meter",
             "area",
             "p",
+            "q",
+            "s",
             "pf",
+            "ia",
+            "ib",
+            "ic",
             "iavg",
+            "voltage_imbalance_pct",
+            "current_imbalance_pct",
+            "vavg",
+            "thd_current",
+            "thd_voltage",
             "kwh_cumulative",
             "kwh_telemetry_raw_delta",
             "kwh_telemetry",

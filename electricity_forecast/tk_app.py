@@ -10,7 +10,8 @@ from tkinter import filedialog, messagebox, ttk
 from .anomaly import detect_anomalies as run_anomaly_detection
 from .data import summarize_paths
 from .features import build_feature_table, feature_summary
-from .models import forecast_dataframe, train_models
+from .models import backtest_predictions_dataframe, forecast_dataframe, train_models
+from .plots import actual_vs_predicted_figure
 from .types import AnomalyRequest, DataPaths, ForecastRequest
 from .weather import (
     default_weather_month,
@@ -40,6 +41,7 @@ class ElectricityForecastTk:
         self.feature_table = None
         self.trained_models = {}
         self.metrics_df = None
+        self.backtest_df = None
         self.forecast_df = None
         self.anomaly_df = None
 
@@ -70,6 +72,7 @@ class ElectricityForecastTk:
         defaults = _default_paths()
         rows = [
             ("telemetry_csv", "data_2026.csv"),
+            ("guests_csv", "Danh sách khách/khách hàng CSV"),
         ]
         for row, (key, label) in enumerate(rows):
             ttk.Label(frame, text=label).grid(
@@ -96,7 +99,7 @@ class ElectricityForecastTk:
         self.data_status.pack(side="left", padx=12)
         ttk.Label(
             frame,
-            text="Import uses only data_2026.csv. The app derives hourly kWh, P, PF, and current from this file.",
+            text="Electrical telemetry uses data_2026.csv. Customer list CSV is optional and fills guest_count for forecasting.",
         ).grid(row=len(rows) + 1, column=0, columnspan=3, sticky="w", pady=(0, 8))
         self.data_summary = tk.Text(frame, height=24, wrap="word")
         self.data_summary.grid(row=len(rows) + 2, column=0, columnspan=3, sticky="nsew")
@@ -116,8 +119,10 @@ class ElectricityForecastTk:
             controls, text="Train / Backtest", command=self.train
         )
         self.train_button.pack(side="left")
+        self.backtest_chart_frame = ttk.Frame(frame)
+        self.backtest_chart_frame.pack(fill="both", expand=True)
         self.metrics_tree = _tree(frame)
-        self.metrics_tree.pack(fill="both", expand=True)
+        self.metrics_tree.pack(fill="both", expand=True, pady=(8, 0))
 
     def _build_forecast_tab(self, notebook: ttk.Notebook) -> None:
         frame = ttk.Frame(notebook, padding=12)
@@ -225,6 +230,9 @@ class ElectricityForecastTk:
         ttk.Button(frame, text="Save Metrics CSV", command=self.save_metrics).pack(
             anchor="w", pady=4
         )
+        ttk.Button(frame, text="Save Backtest CSV", command=self.save_backtest).pack(
+            anchor="w", pady=4
+        )
         ttk.Button(frame, text="Save Anomaly CSV", command=self.save_anomalies).pack(
             anchor="w", pady=4
         )
@@ -314,6 +322,9 @@ class ElectricityForecastTk:
     def save_metrics(self) -> None:
         self._save_df(self.metrics_df, "metrics.csv")
 
+    def save_backtest(self) -> None:
+        self._save_df(self.backtest_df, "backtest_actual_vs_predicted.csv")
+
     def save_anomalies(self) -> None:
         self._save_df(self.anomaly_df, "anomalies.csv")
 
@@ -329,8 +340,10 @@ class ElectricityForecastTk:
 
     def _on_trained(self, result) -> None:
         self.trained_models, self.metrics_df = result
+        self.backtest_df = backtest_predictions_dataframe(self.trained_models)
         self.train_button.configure(state="normal")
         _fill_tree(self.metrics_tree, self.metrics_df)
+        self._plot_backtest(self.backtest_df)
 
     def _on_weather_loaded(self, result) -> None:
         self.weather_button.configure(state="normal")
@@ -390,6 +403,16 @@ class ElectricityForecastTk:
             ax.legend(loc="upper left", fontsize="small", ncols=2)
             fig.autofmt_xdate()
         canvas = FigureCanvasTkAgg(fig, master=self.chart_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    def _plot_backtest(self, df) -> None:
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+        for child in self.backtest_chart_frame.winfo_children():
+            child.destroy()
+        fig = actual_vs_predicted_figure(df)
+        canvas = FigureCanvasTkAgg(fig, master=self.backtest_chart_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
 
@@ -464,7 +487,11 @@ class ElectricityForecastTk:
         telemetry = self.paths["telemetry_csv"].get().strip()
         if not telemetry:
             raise ValueError("data_2026.csv is required.")
-        return DataPaths(telemetry_csv=Path(telemetry))
+        guests = self.paths["guests_csv"].get().strip()
+        return DataPaths(
+            telemetry_csv=Path(telemetry),
+            guests_csv=Path(guests) if guests else None,
+        )
 
     def _pick_csv(self, target: tk.StringVar) -> None:
         path = filedialog.askopenfilename(
@@ -500,9 +527,12 @@ class ElectricityForecastTk:
 def _default_paths() -> dict[str, str]:
     downloads = Path.home() / "Downloads"
     telemetry_path = downloads / "data_2026.csv"
+    guests_path = downloads / "sunworld_honthom_hourly_jan2026.csv"
     paths = {}
     if telemetry_path.exists():
         paths["telemetry_csv"] = str(telemetry_path)
+    if guests_path.exists():
+        paths["guests_csv"] = str(guests_path)
     return paths
 
 

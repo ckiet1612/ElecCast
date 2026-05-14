@@ -3,6 +3,7 @@ from __future__ import annotations
 from electricity_forecast.data import (
     parse_meter_name,
     read_cumulative_kwh_hourly,
+    read_guest_counts,
 )
 
 
@@ -47,3 +48,18 @@ def test_read_cumulative_kwh_hourly_flags_negative_delta(tmp_path):
     second = df.sort_values("timestamp_local").iloc[1]
     assert second["kwh_telemetry_issue"] == "kwh_reset_or_negative_delta"
     assert second["kwh_telemetry"] != second["kwh_telemetry"]
+
+
+def test_read_guest_counts_accepts_customer_csv(tmp_path):
+    csv_path = tmp_path / "customers.csv"
+    csv_path.write_text(
+        "timestamp,area,customer_count\n"
+        "2026-01-01 07:15:00,FB2,120\n"
+        "2026-01-01 07:45:00,FB2,140\n",
+        encoding="utf-8",
+    )
+    df = read_guest_counts(csv_path)
+    row = df.iloc[0]
+    assert row["timestamp_local"].hour == 7
+    assert row["area"] == "FB2"
+    assert row["guest_count"] == 130

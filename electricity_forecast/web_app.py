@@ -12,7 +12,7 @@ from urllib.parse import parse_qs
 from .anomaly import detect_anomalies as run_anomaly_detection
 from .data import summarize_paths
 from .features import build_feature_table, feature_summary
-from .models import forecast_dataframe, train_models
+from .models import backtest_predictions_dataframe, forecast_dataframe, train_models
 from .types import AnomalyRequest, DataPaths, ForecastRequest
 from .weather import (
     default_weather_month,
@@ -29,6 +29,7 @@ class WebState:
     feature_table: object | None = None
     trained_models: dict = field(default_factory=dict)
     metrics_df: object | None = None
+    backtest_df: object | None = None
     forecast_df: object | None = None
     anomaly_df: object | None = None
     anomaly_only: bool = True
@@ -65,6 +66,9 @@ def _handler(state: WebState):
                 return
             if self.path.startswith("/download/metrics"):
                 self._download_df(state.metrics_df, "metrics.csv")
+                return
+            if self.path.startswith("/download/backtest"):
+                self._download_df(state.backtest_df, "backtest_actual_vs_predicted.csv")
                 return
             if self.path.startswith("/download/anomalies"):
                 self._download_df(state.anomaly_df, "anomalies.csv")
@@ -132,6 +136,7 @@ def _import_action(state: WebState, form: dict[str, list[str]]) -> None:
     state.feature_summary = feature_summary(state.feature_table)
     state.trained_models = {}
     state.metrics_df = None
+    state.backtest_df = None
     state.forecast_df = None
     state.anomaly_df = None
     state.weather_result = None
@@ -147,6 +152,7 @@ def _train_action(state: WebState, form: dict[str, list[str]]) -> None:
     state.trained_models, state.metrics_df = train_models(
         state.feature_table, meters=meters
     )
+    state.backtest_df = backtest_predictions_dataframe(state.trained_models)
     state.message = "Training and backtest completed."
 
 
@@ -229,7 +235,7 @@ def _render(state: WebState) -> str:
   {_message(state)}
   <section>
     <h2>Data</h2>
-    <p class="muted">Import uses only data_2026.csv. The app derives hourly kWh, P, PF, and current from this file.</p>
+    <p class="muted">Electrical telemetry uses data_2026.csv. Customer list CSV is optional and fills guest_count for forecasting.</p>
     <form method="post" action="/import">
       <div class="grid">{_path_inputs(state.paths)}</div>
       <p><button type="submit">Import / Build Features</button></p>
@@ -242,6 +248,7 @@ def _render(state: WebState) -> str:
       <div><label>Meter</label>{_meter_select("train_meter", meters)}</div>
       <button type="submit">Train / Backtest</button>
     </form>
+    {_backtest_svg(state.backtest_df)}
     {_df_table(state.metrics_df)}
   </section>
   <section>
@@ -272,6 +279,7 @@ def _render(state: WebState) -> str:
     <h2>Export</h2>
     <a class="button" href="/download/forecast">Download Forecast CSV</a>
     <a class="button" href="/download/metrics">Download Metrics CSV</a>
+    <a class="button" href="/download/backtest">Download Backtest CSV</a>
     <a class="button" href="/download/anomalies">Download Anomaly CSV</a>
   </section>
 </main>
@@ -282,6 +290,7 @@ def _render(state: WebState) -> str:
 def _path_inputs(paths: dict[str, str]) -> str:
     labels = {
         "telemetry_csv": "data_2026.csv",
+        "guests_csv": "Danh sách khách/khách hàng CSV",
     }
     return "".join(
         f'<div><label>{label}</label><input name="{key}" value="{html.escape(paths.get(key, ""))}"></div>'
@@ -417,6 +426,70 @@ def _forecast_svg(df) -> str:
     return "".join(lines)
 
 
+def _backtest_svg(df) -> str:
+    if df is None or df.empty:
+        return ""
+    import math
+
+    areas = sorted(df["area"].dropna().unique())[:12]
+    if not areas:
+        return ""
+    cols = min(3, len(areas))
+    rows = math.ceil(len(areas) / cols)
+    cell_w, cell_h = 330, 260
+    width, height = cell_w * cols, cell_h * rows
+    lines = [
+        f'<svg viewBox="0 0 {width} {height}" style="height:{height}px" role="img">'
+    ]
+    for idx, area in enumerate(areas):
+        group = df[df["area"].eq(area)]
+        actual = group["actual_kwh"].astype(float)
+        predicted = group["predicted_kwh"].astype(float)
+        min_value = min(float(actual.min()), float(predicted.min()))
+        max_value = max(float(actual.max()), float(predicted.max()))
+        span = max(max_value - min_value, 1.0)
+        pad = span * 0.08
+        min_value -= pad
+        max_value += pad
+        span = max(max_value - min_value, 1.0)
+        col = idx % cols
+        row = idx // cols
+        ox = col * cell_w
+        oy = row * cell_h
+        left, top = ox + 48, oy + 34
+        plot_w, plot_h = cell_w - 72, cell_h - 72
+        lines.append(
+            f'<text x="{left}" y="{oy + 18}" font-size="13" font-weight="600">{html.escape(str(area))}: Actual vs Predicted</text>'
+        )
+        lines.append(
+            f'<line x1="{left}" y1="{top + plot_h}" x2="{left + plot_w}" y2="{top + plot_h}" stroke="#d8dee4"/>'
+        )
+        lines.append(
+            f'<line x1="{left}" y1="{top}" x2="{left}" y2="{top + plot_h}" stroke="#d8dee4"/>'
+        )
+        lines.append(
+            f'<line x1="{left}" y1="{top + plot_h}" x2="{left + plot_w}" y2="{top}" stroke="#d55e5e" stroke-dasharray="5 4"/>'
+        )
+        for _, point in group.iterrows():
+            x = left + ((float(point["actual_kwh"]) - min_value) / span) * plot_w
+            y = (
+                top
+                + plot_h
+                - ((float(point["predicted_kwh"]) - min_value) / span) * plot_h
+            )
+            lines.append(
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.5" fill="#3158d4" opacity="0.65"/>'
+            )
+        lines.append(
+            f'<text x="{left + plot_w / 2 - 34}" y="{oy + cell_h - 12}" font-size="11">Actual kWh</text>'
+        )
+        lines.append(
+            f'<text x="{ox + 4}" y="{top + plot_h / 2}" font-size="11" transform="rotate(-90 {ox + 4},{top + plot_h / 2})">Predicted kWh</text>'
+        )
+    lines.append("</svg>")
+    return "".join(lines)
+
+
 def _anomaly_svg(df) -> str:
     if df is None or df.empty:
         return ""
@@ -501,21 +574,28 @@ def _first(form: dict[str, list[str]], key: str) -> str:
 
 
 def _path_keys() -> list[str]:
-    return ["telemetry_csv"]
+    return ["telemetry_csv", "guests_csv"]
 
 
 def _data_paths(paths: dict[str, str]) -> DataPaths:
     if not paths.get("telemetry_csv"):
         raise ValueError("data_2026.csv is required.")
-    return DataPaths(telemetry_csv=Path(paths["telemetry_csv"]))
+    guests = paths.get("guests_csv")
+    return DataPaths(
+        telemetry_csv=Path(paths["telemetry_csv"]),
+        guests_csv=Path(guests) if guests else None,
+    )
 
 
 def _default_paths() -> dict[str, str]:
     downloads = Path.home() / "Downloads"
     telemetry_path = downloads / "data_2026.csv"
+    guests_path = downloads / "sunworld_honthom_hourly_jan2026.csv"
     paths = {}
     if telemetry_path.exists():
         paths["telemetry_csv"] = str(telemetry_path)
+    if guests_path.exists():
+        paths["guests_csv"] = str(guests_path)
     return paths
 
 
