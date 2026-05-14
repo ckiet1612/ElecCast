@@ -11,8 +11,9 @@ from .anomaly import detect_anomalies as run_anomaly_detection
 from .data import summarize_paths
 from .features import build_feature_table, feature_summary
 from .models import backtest_predictions_dataframe, forecast_dataframe, train_models
+from .optimizer import optimize_consumption
 from .plots import actual_vs_predicted_figure
-from .types import AnomalyRequest, DataPaths, ForecastRequest
+from .types import AnomalyRequest, DataPaths, ForecastRequest, OptimizationRequest
 from .weather import (
     default_weather_month,
     default_weather_location_label,
@@ -44,14 +45,23 @@ class ElectricityForecastTk:
         self.backtest_df = None
         self.forecast_df = None
         self.anomaly_df = None
+        self.optimization_schedule_df = None
+        self.optimization_summary_df = None
+        self.optimization_results = []
 
         self.paths: dict[str, tk.StringVar] = {}
         self.train_meter = tk.StringVar(value="All meters")
         self.forecast_meter = tk.StringVar(value="All meters")
         self.anomaly_meter = tk.StringVar(value="All meters")
+        self.optimize_meter = tk.StringVar(value="All meters")
         self.anomaly_contamination = tk.DoubleVar(value=0.05)
         self.anomaly_only = tk.BooleanVar(value=True)
         self.horizon = tk.StringVar(value="168 hours")
+        self.opt_horizon = tk.StringVar(value="24 hours")
+        self.opt_temp_min = tk.DoubleVar(value=22.0)
+        self.opt_temp_max = tk.DoubleVar(value=30.0)
+        self.opt_learning_rate = tk.DoubleVar(value=0.01)
+        self.opt_max_iterations = tk.IntVar(value=500)
         self.temperature = tk.DoubleVar(value=28.0)
         self.weather_location = tk.StringVar(value=default_weather_location_label())
         self.weather_month = tk.StringVar(value=default_weather_month())
@@ -64,6 +74,7 @@ class ElectricityForecastTk:
         self._build_training_tab(notebook)
         self._build_forecast_tab(notebook)
         self._build_anomaly_tab(notebook)
+        self._build_optimization_tab(notebook)
         self._build_export_tab(notebook)
 
     def _build_data_tab(self, notebook: ttk.Notebook) -> None:
@@ -221,6 +232,59 @@ class ElectricityForecastTk:
         self.anomaly_tree = _tree(frame)
         self.anomaly_tree.pack(fill="both", expand=True, pady=(8, 0))
 
+    def _build_optimization_tab(self, notebook: ttk.Notebook) -> None:
+        frame = ttk.Frame(notebook, padding=12)
+        notebook.add(frame, text="Optimization")
+
+        controls = ttk.Frame(frame)
+        controls.pack(fill="x", pady=(0, 8))
+        ttk.Label(controls, text="Meter").pack(side="left")
+        self.optimize_meter_combo = ttk.Combobox(
+            controls, textvariable=self.optimize_meter, values=["All meters"], width=20
+        )
+        self.optimize_meter_combo.pack(side="left", padx=8)
+        ttk.Label(controls, text="Horizon").pack(side="left")
+        ttk.Combobox(
+            controls,
+            textvariable=self.opt_horizon,
+            values=["12 hours", "24 hours", "48 hours", "168 hours"],
+            width=12,
+            state="readonly",
+        ).pack(side="left", padx=8)
+        ttk.Label(controls, text="Temp min").pack(side="left")
+        ttk.Spinbox(
+            controls, from_=15.0, to=35.0, increment=0.5,
+            textvariable=self.opt_temp_min, width=5,
+        ).pack(side="left", padx=4)
+        ttk.Label(controls, text="Temp max").pack(side="left")
+        ttk.Spinbox(
+            controls, from_=20.0, to=40.0, increment=0.5,
+            textvariable=self.opt_temp_max, width=5,
+        ).pack(side="left", padx=4)
+        ttk.Label(controls, text="LR").pack(side="left")
+        ttk.Entry(
+            controls, textvariable=self.opt_learning_rate, width=6,
+        ).pack(side="left", padx=4)
+        ttk.Label(controls, text="Iters").pack(side="left")
+        ttk.Spinbox(
+            controls, from_=10, to=5000, increment=50,
+            textvariable=self.opt_max_iterations, width=6,
+        ).pack(side="left", padx=4)
+
+        self.optimize_button = ttk.Button(
+            controls, text="Optimize", command=self.optimize
+        )
+        self.optimize_button.pack(side="left", padx=(12, 0))
+        self.optimize_status = ttk.Label(controls, text="")
+        self.optimize_status.pack(side="left", padx=12)
+
+        self.opt_chart_frame = ttk.Frame(frame)
+        self.opt_chart_frame.pack(fill="both", expand=True)
+        self.opt_summary_tree = _tree(frame)
+        self.opt_summary_tree.pack(fill="x", pady=(8, 4))
+        self.opt_schedule_tree = _tree(frame)
+        self.opt_schedule_tree.pack(fill="both", expand=True, pady=(4, 0))
+
     def _build_export_tab(self, notebook: ttk.Notebook) -> None:
         frame = ttk.Frame(notebook, padding=12)
         notebook.add(frame, text="Export")
@@ -234,6 +298,9 @@ class ElectricityForecastTk:
             anchor="w", pady=4
         )
         ttk.Button(frame, text="Save Anomaly CSV", command=self.save_anomalies).pack(
+            anchor="w", pady=4
+        )
+        ttk.Button(frame, text="Save Optimization CSV", command=self.save_optimization).pack(
             anchor="w", pady=4
         )
         self.export_status = ttk.Label(frame, text="")
@@ -316,6 +383,34 @@ class ElectricityForecastTk:
 
         self._run_background(task, self._on_anomalies_detected, self._on_anomaly_failed)
 
+    def optimize(self) -> None:
+        if self.feature_table is None or not self.trained_models:
+            messagebox.showerror(
+                "Error", "Import data and train models before optimizing."
+            )
+            return
+        self.optimize_button.configure(state="disabled")
+        self.optimize_status.configure(text="Optimizing...")
+
+        def task():
+            meter = self.optimize_meter.get()
+            meters = (
+                list(self.trained_models) if meter == "All meters" else [meter]
+            )
+            request = OptimizationRequest(
+                meters=meters,
+                horizon_hours=_horizon_hours(self.opt_horizon.get()),
+                temp_min=float(self.opt_temp_min.get()),
+                temp_max=float(self.opt_temp_max.get()),
+                learning_rate=float(self.opt_learning_rate.get()),
+                max_iterations=int(self.opt_max_iterations.get()),
+            )
+            return optimize_consumption(
+                self.trained_models, self.feature_table, request
+            )
+
+        self._run_background(task, self._on_optimized, self._on_optimize_failed)
+
     def save_forecast(self) -> None:
         self._save_df(self.forecast_df, "forecast.csv")
 
@@ -327,6 +422,9 @@ class ElectricityForecastTk:
 
     def save_anomalies(self) -> None:
         self._save_df(self.anomaly_df, "anomalies.csv")
+
+    def save_optimization(self) -> None:
+        self._save_df(self.optimization_schedule_df, "optimization_schedule.csv")
 
     def _on_imported(self, result) -> None:
         summaries, features, summary = result
@@ -386,6 +484,27 @@ class ElectricityForecastTk:
     def _on_anomaly_failed(self, message: str) -> None:
         self.anomaly_button.configure(state="normal")
         messagebox.showerror("Anomaly detection failed", message)
+
+    def _on_optimized(self, result) -> None:
+        schedule_df, summary_df, results = result
+        self.optimization_schedule_df = schedule_df
+        self.optimization_summary_df = summary_df
+        self.optimization_results = results
+        self.optimize_button.configure(state="normal")
+        total_saved = sum(r.savings_kwh for r in results)
+        self.optimize_status.configure(
+            text=f"Done. Savings: {total_saved:.2f} kWh"
+        )
+        if summary_df is not None and not summary_df.empty:
+            _fill_tree(self.opt_summary_tree, summary_df)
+        if schedule_df is not None and not schedule_df.empty:
+            _fill_tree(self.opt_schedule_tree, schedule_df.head(500))
+        self._plot_optimization(results, schedule_df)
+
+    def _on_optimize_failed(self, message: str) -> None:
+        self.optimize_button.configure(state="normal")
+        self.optimize_status.configure(text="Error")
+        messagebox.showerror("Optimization failed", message)
 
     def _plot_forecast(self, df) -> None:
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -448,12 +567,51 @@ class ElectricityForecastTk:
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
 
+    def _plot_optimization(self, results, schedule_df) -> None:
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+        from matplotlib.figure import Figure
+
+        for child in self.opt_chart_frame.winfo_children():
+            child.destroy()
+
+        ncols = 2
+        fig = Figure(figsize=(12, 4.5), tight_layout=True)
+
+        ax1 = fig.add_subplot(1, ncols, 1)
+        ax1.set_title("Cost Function Convergence", fontsize=11)
+        for r in results[:8]:
+            cost_h = r.cost_history
+            if len(cost_h) >= 2:
+                label = f"{r.meter} ({'✓' if r.converged else f'×{r.iterations}'})"
+                ax1.plot(range(len(cost_h)), cost_h, label=label, linewidth=1.5)
+        ax1.set_xlabel("Iteration")
+        ax1.set_ylabel("Cost (kWh)")
+        ax1.legend(loc="upper right", fontsize="x-small", ncols=2)
+
+        ax2 = fig.add_subplot(1, ncols, 2)
+        ax2.set_title("kWh Before vs After", fontsize=11)
+        if schedule_df is not None and not schedule_df.empty:
+            meters = list(schedule_df["meter"].unique())[:4]
+            for meter in meters:
+                group = schedule_df[schedule_df["meter"].eq(meter)].reset_index(drop=True)
+                x = range(len(group))
+                ax2.plot(x, group["kwh_before"], linestyle="--", alpha=0.6, label=f"{meter} before")
+                ax2.plot(x, group["kwh_after"], linewidth=1.5, alpha=0.8, label=f"{meter} after")
+        ax2.set_xlabel("Hour")
+        ax2.set_ylabel("kWh")
+        ax2.legend(loc="upper right", fontsize="x-small", ncols=2)
+
+        canvas = FigureCanvasTkAgg(fig, master=self.opt_chart_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
     def _refresh_meters(self) -> None:
         meters = sorted(self.feature_table["meter"].dropna().unique())
         values = ["All meters", *meters]
         self.train_meter_combo.configure(values=values)
         self.forecast_meter_combo.configure(values=values)
         self.anomaly_meter_combo.configure(values=values)
+        self.optimize_meter_combo.configure(values=values)
         self._sync_weather_month_to_data()
 
     def _refresh_anomaly_table(self) -> None:
@@ -537,7 +695,7 @@ def _default_paths() -> dict[str, str]:
 
 
 def _horizon_hours(label: str) -> int:
-    return {"24 hours": 24, "48 hours": 48, "168 hours": 168, "30 days": 720}[label]
+    return {"12 hours": 12, "24 hours": 24, "48 hours": 48, "168 hours": 168, "30 days": 720}[label]
 
 
 def _tree(parent) -> ttk.Treeview:

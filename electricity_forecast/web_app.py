@@ -13,7 +13,8 @@ from .anomaly import detect_anomalies as run_anomaly_detection
 from .data import summarize_paths
 from .features import build_feature_table, feature_summary
 from .models import backtest_predictions_dataframe, forecast_dataframe, train_models
-from .types import AnomalyRequest, DataPaths, ForecastRequest
+from .optimizer import optimize_consumption
+from .types import AnomalyRequest, DataPaths, ForecastRequest, OptimizationRequest
 from .weather import (
     default_weather_month,
     default_weather_location_label,
@@ -34,6 +35,9 @@ class WebState:
     anomaly_df: object | None = None
     anomaly_only: bool = True
     weather_result: object | None = None
+    optimization_schedule_df: object | None = None
+    optimization_summary_df: object | None = None
+    optimization_results: list = field(default_factory=list)
     message: str = ""
     error: str = ""
     csv_summary: list[dict[str, object]] = field(default_factory=list)
@@ -73,6 +77,9 @@ def _handler(state: WebState):
             if self.path.startswith("/download/anomalies"):
                 self._download_df(state.anomaly_df, "anomalies.csv")
                 return
+            if self.path.startswith("/download/optimization"):
+                self._download_df(state.optimization_schedule_df, "optimization_schedule.csv")
+                return
             self._send_html(_render(state))
 
         def do_POST(self):
@@ -88,6 +95,8 @@ def _handler(state: WebState):
                     _forecast_action(state, form)
                 elif action == "anomaly":
                     _anomaly_action(state, form)
+                elif action == "optimize":
+                    _optimize_action(state, form)
                 else:
                     state.error = f"Unknown action: {action}"
             except Exception as exc:  # pragma: no cover - UI safety net
@@ -199,6 +208,32 @@ def _anomaly_action(state: WebState, form: dict[str, list[str]]) -> None:
     state.message = "Anomaly detection completed."
 
 
+def _optimize_action(state: WebState, form: dict[str, list[str]]) -> None:
+    state.error = ""
+    if state.feature_table is None or not state.trained_models:
+        raise ValueError("Import data and train models before optimizing.")
+    meter = _first(form, "optimize_meter")
+    meters = (
+        list(state.trained_models) if not meter or meter == "All meters" else [meter]
+    )
+    request = OptimizationRequest(
+        meters=meters,
+        horizon_hours=int(_first(form, "opt_horizon_hours") or 24),
+        temp_min=float(_first(form, "opt_temp_min") or 22.0),
+        temp_max=float(_first(form, "opt_temp_max") or 30.0),
+        learning_rate=float(_first(form, "opt_learning_rate") or 0.01),
+        max_iterations=int(_first(form, "opt_max_iterations") or 500),
+    )
+    schedule_df, summary_df, results = optimize_consumption(
+        state.trained_models, state.feature_table, request
+    )
+    state.optimization_schedule_df = schedule_df
+    state.optimization_summary_df = summary_df
+    state.optimization_results = results
+    total_saved = sum(r.savings_kwh for r in results)
+    state.message = f"Optimization completed. Total savings: {total_saved:.2f} kWh."
+
+
 def _render(state: WebState) -> str:
     meters = _meters(state)
     return f"""<!doctype html>
@@ -276,11 +311,29 @@ def _render(state: WebState) -> str:
     {_df_table(_anomaly_table_df(state))}
   </section>
   <section>
+    <h2>Optimization (Gradient Descent)</h2>
+    <p class="muted">Tìm bộ tham số tối ưu (nhiệt độ, lượng khách) để giảm thiểu tiêu thụ điện bằng thuật toán Gradient Descent.</p>
+    <form method="post" action="/optimize" class="row">
+      <div><label>Meter</label>{_meter_select("optimize_meter", list(state.trained_models) if state.trained_models else meters)}</div>
+      <div><label>Horizon</label><select name="opt_horizon_hours"><option value="12">12 hours</option><option value="24" selected>24 hours</option><option value="48">48 hours</option><option value="168">168 hours</option></select></div>
+      <div><label>Temp min (°C)</label><input name="opt_temp_min" value="22.0"></div>
+      <div><label>Temp max (°C)</label><input name="opt_temp_max" value="30.0"></div>
+      <div><label>Learning rate</label><input name="opt_learning_rate" value="0.01"></div>
+      <div><label>Max iterations</label><input name="opt_max_iterations" value="500"></div>
+      <button type="submit">Optimize</button>
+    </form>
+    {_optimization_convergence_svg(state.optimization_results)}
+    {_optimization_comparison_svg(state.optimization_schedule_df)}
+    {_df_table(state.optimization_summary_df)}
+    {_df_table(state.optimization_schedule_df.head(500) if state.optimization_schedule_df is not None and not state.optimization_schedule_df.empty else None)}
+  </section>
+  <section>
     <h2>Export</h2>
     <a class="button" href="/download/forecast">Download Forecast CSV</a>
     <a class="button" href="/download/metrics">Download Metrics CSV</a>
     <a class="button" href="/download/backtest">Download Backtest CSV</a>
     <a class="button" href="/download/anomalies">Download Anomaly CSV</a>
+    <a class="button" href="/download/optimization">Download Optimization CSV</a>
   </section>
 </main>
 </body>
@@ -548,6 +601,139 @@ def _anomaly_table_df(state: WebState):
     if state.anomaly_only:
         data = data[data["is_anomaly"]]
     return data.head(500)
+
+
+def _optimization_convergence_svg(results: list) -> str:
+    """SVG chart showing cost function convergence over GD iterations."""
+    if not results:
+        return ""
+    width, height = 1000, 260
+    colors = [
+        "#0969da", "#1a7f37", "#d1242f", "#8250df",
+        "#9a6700", "#bf3989", "#0550ae", "#57606a",
+    ]
+    lines = [f'<svg viewBox="0 0 {width} {height}" role="img">']
+    lines.append(f'<text x="40" y="16" font-size="13" font-weight="600">Cost Function Convergence (Gradient Descent)</text>')
+    lines.append('<line x1="40" y1="220" x2="980" y2="220" stroke="#d8dee4"/>')
+    lines.append('<line x1="40" y1="30" x2="40" y2="220" stroke="#d8dee4"/>')
+
+    for idx, result in enumerate(results[:8]):
+        cost_h = result.cost_history
+        if len(cost_h) < 2:
+            continue
+        min_c = min(cost_h)
+        max_c = max(cost_h)
+        span = max(max_c - min_c, 1e-9)
+        points = []
+        for i, c in enumerate(cost_h):
+            x = 40 + (i / max(len(cost_h) - 1, 1)) * 940
+            y = 220 - ((c - min_c) / span) * 180
+            points.append(f"{x:.1f},{y:.1f}")
+        color = colors[idx % len(colors)]
+        lines.append(
+            f'<polyline points="{" ".join(points)}" fill="none" stroke="{color}" stroke-width="2"/>'
+        )
+        label = html.escape(result.meter)
+        conv = "✓" if result.converged else f"×{result.iterations}"
+        lines.append(
+            f'<text x="{50 + idx * 120}" y="{height - 8}" fill="{color}" font-size="11">{label} ({conv})</text>'
+        )
+
+    lines.append(
+        '<text x="4" y="130" font-size="11" transform="rotate(-90 4,130)">Cost (kWh)</text>'
+    )
+    lines.append(
+        f'<text x="{width // 2 - 30}" y="{height - 24}" font-size="11">Iteration</text>'
+    )
+    lines.append("</svg>")
+    return "".join(lines)
+
+
+def _optimization_comparison_svg(schedule_df) -> str:
+    """SVG chart comparing kWh before vs after optimization per hour."""
+    if schedule_df is None or schedule_df.empty:
+        return ""
+    meters = list(schedule_df["meter"].unique())[:4]
+    if not meters:
+        return ""
+
+    import math
+
+    cols = min(2, len(meters))
+    rows = math.ceil(len(meters) / cols)
+    cell_w, cell_h = 500, 260
+    width, height = cell_w * cols, cell_h * rows
+
+    lines = [f'<svg viewBox="0 0 {width} {height}" style="height:{height}px" role="img">']
+
+    for idx, meter in enumerate(meters):
+        group = schedule_df[schedule_df["meter"].eq(meter)].reset_index(drop=True)
+        before = group["kwh_before"].astype(float)
+        after = group["kwh_after"].astype(float)
+        all_vals = list(before) + list(after)
+        min_v = min(all_vals) if all_vals else 0
+        max_v = max(all_vals) if all_vals else 1
+        span = max(max_v - min_v, 1e-9)
+        pad = span * 0.08
+        min_v -= pad
+        span = max(max_v + pad - min_v, 1e-9)
+
+        col = idx % cols
+        row = idx // cols
+        ox = col * cell_w
+        oy = row * cell_h
+        left, top = ox + 48, oy + 34
+        plot_w, plot_h = cell_w - 72, cell_h - 72
+
+        lines.append(
+            f'<text x="{left}" y="{oy + 18}" font-size="13" font-weight="600">{html.escape(meter)}: Before vs After</text>'
+        )
+        lines.append(
+            f'<line x1="{left}" y1="{top + plot_h}" x2="{left + plot_w}" y2="{top + plot_h}" stroke="#d8dee4"/>'
+        )
+        lines.append(
+            f'<line x1="{left}" y1="{top}" x2="{left}" y2="{top + plot_h}" stroke="#d8dee4"/>'
+        )
+
+        n = len(group)
+        for i in range(n):
+            x = left + (i / max(n - 1, 1)) * plot_w
+            y_b = top + plot_h - ((float(before.iloc[i]) - min_v) / span) * plot_h
+            y_a = top + plot_h - ((float(after.iloc[i]) - min_v) / span) * plot_h
+            lines.append(f'<circle cx="{x:.1f}" cy="{y_b:.1f}" r="2.5" fill="#d1242f" opacity="0.6"/>')
+            lines.append(f'<circle cx="{x:.1f}" cy="{y_a:.1f}" r="2.5" fill="#1a7f37" opacity="0.6"/>')
+
+        if n >= 2:
+            pts_b = []
+            pts_a = []
+            for i in range(n):
+                x = left + (i / max(n - 1, 1)) * plot_w
+                y_b = top + plot_h - ((float(before.iloc[i]) - min_v) / span) * plot_h
+                y_a = top + plot_h - ((float(after.iloc[i]) - min_v) / span) * plot_h
+                pts_b.append(f"{x:.1f},{y_b:.1f}")
+                pts_a.append(f"{x:.1f},{y_a:.1f}")
+            lines.append(
+                f'<polyline points="{" ".join(pts_b)}" fill="none" stroke="#d1242f" stroke-width="1.5" opacity="0.7"/>'
+            )
+            lines.append(
+                f'<polyline points="{" ".join(pts_a)}" fill="none" stroke="#1a7f37" stroke-width="1.5" opacity="0.7"/>'
+            )
+
+        legend_x = left + plot_w - 140
+        lines.append(f'<rect x="{legend_x}" y="{oy + 6}" width="8" height="8" fill="#d1242f"/>')
+        lines.append(f'<text x="{legend_x + 12}" y="{oy + 14}" font-size="10">Before</text>')
+        lines.append(f'<rect x="{legend_x + 60}" y="{oy + 6}" width="8" height="8" fill="#1a7f37"/>')
+        lines.append(f'<text x="{legend_x + 74}" y="{oy + 14}" font-size="10">After</text>')
+
+        lines.append(
+            f'<text x="{left + plot_w / 2 - 15}" y="{oy + cell_h - 12}" font-size="11">Hour</text>'
+        )
+        lines.append(
+            f'<text x="{ox + 4}" y="{top + plot_h / 2}" font-size="11" transform="rotate(-90 {ox + 4},{top + plot_h / 2})">kWh</text>'
+        )
+
+    lines.append("</svg>")
+    return "".join(lines)
 
 
 def _checked(value: bool) -> str:

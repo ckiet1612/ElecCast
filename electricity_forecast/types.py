@@ -115,3 +115,33 @@ class TrainedMeterModel:
     residual_std: float
     history: Any
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class OptimizationRequest:
+    meters: list[str] | None = None
+    horizon_hours: int = 24
+    start_time: datetime | None = None
+    temp_min: float = 22.0
+    temp_max: float = 30.0
+    guest_min: float = 0.0
+    guest_max: float | None = None
+    learning_rate: float = 0.01
+    max_iterations: int = 500
+    convergence_threshold: float = 1e-6
+    weather_location: str | None = None
+    weather_month: str | None = None
+
+
+@dataclass
+class OptimizationResult:
+    meter: str
+    area: str
+    total_kwh_before: float
+    total_kwh_after: float
+    savings_kwh: float
+    savings_percent: float
+    iterations: int
+    converged: bool
+    schedule: list[dict[str, Any]] = field(default_factory=list)
+    cost_history: list[float] = field(default_factory=list)
