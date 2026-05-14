@@ -69,6 +69,53 @@ Quá trình huấn luyện sử dụng hồi quy tuyến tính theo từng công
 
 Tab Anomaly sử dụng Isolation Forest kết hợp với các quy tắc vận hành điện để đánh dấu các chỉ số theo giờ bất thường từ `data_2026.csv`. Tab này đọc phần chênh lệch kWh cùng với các chỉ số `P`, `Q`, `S`, `PF`, `IA`, `IB`, `IC`, `IAVG`, `%V`, `%A`, `VAVG` và các chỉ số THD nếu có. Kết quả bao gồm điểm bất thường, mức độ nghiêm trọng, loại bất thường và lý do, chẳng hạn như tăng đột biến tiêu thụ, quá tải hệ thống, hệ số công suất thấp, lệch pha, điện áp bất thường, méo hài, thiết bị vận hành bất thường, tiêu thụ ngoài giờ hoặc reset/outlier telemetry.
 
+## Tối ưu tiêu thụ điện (Gradient Descent)
+
+Tab Optimization sử dụng thuật toán **Projected Gradient Descent** để tìm bộ tham số vận hành tối ưu nhằm giảm thiểu tổng tiêu thụ điện (kWh) trong khoảng thời gian dự báo.
+
+### Biến điều khiển
+
+Thuật toán tối ưu hai biến có thể kiểm soát được trong thực tế:
+
+- **`temperature_c`**: nhiệt độ setpoint / điều hòa (°C), ràng buộc trong khoảng `[temp_min, temp_max]`
+- **`guest_count`**: số lượng khách / lịch trình vận hành, ràng buộc trong khoảng `[guest_min, guest_max]`
+
+### Thuật toán
+
+Hàm mục tiêu: `J(θ) = Σ predicted_kwh(θ)` với `θ = [temperature_c, guest_count]` cho mỗi giờ.
+
+1. **Khởi tạo** `θ₀` từ giá trị mặc định (nhiệt độ mô phỏng, số khách ước lượng)
+2. **Tính gradient**: lấy trực tiếp từ hệ số `coef_` của mô hình Linear/Ridge Regression (analytical gradient), không cần finite differences
+3. **Cập nhật**: `θ ← θ - α × ∇J(θ)` (α = learning rate)
+4. **Chiếu ràng buộc**: `θ = clamp(θ, min, max)` đảm bảo các tham số nằm trong miền cho phép
+5. **Kiểm tra hội tụ**: dừng khi `|J(θ_new) - J(θ_old)| < threshold`
+
+### Tối ưu hiệu năng
+
+- **Analytical gradient**: trích xuất trực tiếp hệ số từ sklearn pipeline, không cần tính finite differences
+- **Vectorized predict**: dự báo toàn bộ horizon cùng lúc bằng `model.predict(X)` trên numpy array
+- **Pre-built feature matrix**: build feature matrix 1 lần duy nhất, chỉ overwrite 2 cột controllable mỗi iteration
+
+Kết quả: 500 iterations cho horizon 168h chạy trong khoảng **< 0.1 giây**.
+
+### Tham số tùy chỉnh
+
+| Tham số | Mặc định | Mô tả |
+|---------|----------|-------|
+| Horizon | 24h | Khoảng thời gian tối ưu |
+| Temp min | 22.0°C | Nhiệt độ tối thiểu cho phép |
+| Temp max | 30.0°C | Nhiệt độ tối đa cho phép |
+| Learning rate | 0.01 | Tốc độ học của Gradient Descent |
+| Max iterations | 500 | Số vòng lặp tối đa |
+
+### Kết quả đầu ra
+
+- **Bảng tổng hợp**: tổng kWh trước/sau tối ưu, kWh tiết kiệm, phần trăm tiết kiệm, số iteration, trạng thái hội tụ
+- **Biểu đồ convergence**: đường cong cost function giảm dần qua các iteration
+- **Biểu đồ so sánh**: kWh trước vs sau tối ưu theo giờ
+- **Lịch tối ưu chi tiết**: nhiệt độ và số khách tối ưu cho từng giờ, kèm so sánh before/after
+- **Export CSV**: xuất lịch tối ưu ra file `optimization_schedule.csv`
+
 ## Quy trình kiểm tra nhanh bằng CLI
 
 ```bash
